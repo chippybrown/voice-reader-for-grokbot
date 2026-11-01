@@ -1,4 +1,5 @@
 # Read Grok Bot's on-disk chat mirror.
+import hashlib
 #
 # The desktop app (Electron, bundle id com.anysphere.sand) keeps a sliding
 # window of each bot's transcript in sand-client-persistence/*.blob. Each
@@ -253,24 +254,47 @@ def _text_content(value):
     return ""
 
 
+def _is_outbound(entry):
+    """Messages the bot sent to another agent, not to the person."""
+    if entry.get("toAgent"):
+        return True
+    entry_id = entry.get("id")
+    return isinstance(entry_id, str) and entry_id.startswith("agent-outbound")
+
+
 def _entry_text(entry):
-    """Spoken text of one transcript entry, or '' if it is not a bot reply."""
+    """Spoken text of one transcript entry, or '' if it is not a reply to the user.
+
+    User-facing replies are send-message entries whose message type is text,
+    and assistant messages that are not addressed to another agent.
+    """
+    if _is_outbound(entry):
+        return ""
     kind = entry.get("kind")
     if kind == "send-message":
         message = entry.get("message")
-        if isinstance(message, dict):
-            message_type = message.get("type")
-            if message_type not in (None, "text"):
-                return ""
-            text = _text_content(message)
-            if text:
-                return text
-        elif message:
-            return _text_content(message)
-        return _text_content(entry.get("content")) or _text_content(entry.get("text"))
+        if not isinstance(message, dict) or message.get("type") != "text":
+            return ""
+        return _text_content(message)
     if kind == "message" and entry.get("role") == "assistant":
         return _text_content(entry.get("content"))
     return ""
+
+
+def entry_keys(entry, bot, text):
+    """Stable ids for one reply. Position and seq are not included.
+
+    A rewritten or compacted slice keeps the same message id, or the same
+    bot, kind, timestamp, and text. Either one is enough to recognize it.
+    """
+    keys = []
+    entry_id = entry.get("id")
+    if isinstance(entry_id, str) and entry_id.strip():
+        keys.append("id:" + entry_id.strip())
+    stamp = entry.get("timestampMs")
+    raw = "%s\n%s\n%s\n%s" % (bot, entry.get("kind") or "", "" if stamp is None else stamp, text)
+    keys.append("h:" + hashlib.sha256(raw.encode("utf-8")).hexdigest())
+    return keys
 
 
 def _clock(timestamp_ms):
@@ -312,20 +336,20 @@ def active_transcript(directory):
     return rows[-1]
 
 
-def reply_lines(directory):
-    """(lines, bot names) for the active chat.
+def reply_snapshot(directory):
+    """(lines, bot names, key lists, active file) for the open chat.
 
-    Each line is 'BotName 3:45:01 PM #seq text' so the toolbar can tell bots
-    apart and can skip a line it has already spoken. The '#seq' is removed
-    before anything is read aloud.
+    key lists identify replies without using their position. active file is
+    the transcript path, or None when there is no chat to follow.
     """
     names = roster_names(directory)
     transcript = active_transcript(directory)
     if transcript is None:
-        return [], sorted(names.values(), key=len, reverse=True)
+        return [], sorted(names.values(), key=len, reverse=True), [], None
     agent_id = transcript["agent_id"]
     bot = names.get(agent_id) or "Bot"
     lines = []
+    keylists = []
     entries = list(transcript["entries"])
     entries.sort(key=lambda entry: entry.get("seq") if isinstance(entry, dict) and isinstance(entry.get("seq"), int) else 0)
     for index, entry in enumerate(entries):
@@ -339,5 +363,34 @@ def reply_lines(directory):
             seq = index + 1
         clock = _clock(entry.get("timestampMs")) or "12:00:00 PM"
         lines.append("%s %s #%s %s" % (bot, clock, seq, text))
+        keylists.append(entry_keys(entry, bot, text))
     bot_names = sorted(set(list(names.values()) + [bot]), key=len, reverse=True)
-    return lines, bot_names
+    return lines, bot_names, keylists, transcript["path"]
+
+
+def reply_lines(directory):
+    """(lines, bot names) for the active chat."""
+    lines, names, _keys, _active = reply_snapshot(directory)
+    return lines, names
+
+
+def mark_seen(seen, keylists):
+    """Record every current reply. Nothing already in the file is read."""
+    for keys in keylists:
+        seen.update(keys)
+
+
+def unseen_lines(seen, lines, keylists):
+    """Lines whose message id or content hash has not been seen yet.
+
+    Matching keys are recorded. A later rewrite that only changes seq or
+    order does not come back as a new reply.
+    """
+    fresh = []
+    for line, keys in zip(lines, keylists):
+        if any(key in seen for key in keys):
+            seen.update(keys)
+            continue
+        seen.update(keys)
+        fresh.append(line)
+    return fresh

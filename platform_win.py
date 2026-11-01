@@ -272,6 +272,13 @@ def synthesize(kind, ref, text, speed, pitch, dest):
 
 
 def read_chat():
+    """Replies visible in the Grok Bot window.
+
+    Windows does not parse the saved transcript, so it never sees the
+    toAgent field. Outbound notes to other agents are a file-format
+    distinction. The on-screen reader skips user bubbles and any control
+    whose name carries an agent-outbound id.
+    """
     import uiautomation as auto
     win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
     if not win.Exists(0, 0):
@@ -287,9 +294,17 @@ def read_chat():
             continue
         if name in ("Conversation details", "Computer preview"):
             inside = False
+        if "agent-outbound" in name or "toAgent" in name:
+            continue
         if inside and " " in name and len(name) > 15 and not name.startswith(skip):
             found.append(name)
     return found, []
+
+
+def read_snapshot():
+    """Windows identity is the on-screen text. active is None so the UI rules apply."""
+    lines, names = read_chat()
+    return lines, names, [[line] for line in lines], None
 
 
 def install_hotkeys(flags):

@@ -82,7 +82,7 @@ On Linux these shortcuts use the normal keyboard and do not need an administrato
 Voice commands are on unless you turn them off. Grokbot Voice listens with the computer's microphone for four phrases. That microphone use is separate from the one Grok Bot uses when you talk to it.
 
 - Say **Moya sleep** or **Moya mute**. Your voice stops reaching Grok Bot. Moya keeps reading replies. The bar says **Mic muted**, a crossed-out microphone appears, and a short chime plays.
-- Say **Moya wake** or **Moya unmute**. Grok Bot can hear you again, and a higher chime plays.
+- Say **Moya wake**, **Moya wake up**, **Moya listen**, or **Moya un mute**. Grok Bot can hear you again, and a higher chime plays. The small offline model does not know the single word "unmute", so that word is not a command.
 
 The phrases are ignored while a reply is being read, so Moya's own voice cannot mute the microphone. Stop, Pause, and Play are unchanged.
 
@@ -121,19 +121,29 @@ Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attach
 
 ## Linux Mint
 
-The short way is one command. Paste it in a terminal. It installs the packages, the app, and a menu entry. Run it again any time to update. It asks before turning on start-at-login, and the answer is No if there is no terminal.
+The short way is one command. Paste it in a terminal. An administrator gets everything: the system packages, the app, a menu entry, a desktop icon, and Piper with the Jenny, Amy, and Lessac voices. Run it again any time to update. It asks before turning on start-at-login, and the answer is No if there is no terminal.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash
 ```
 
-To remove the app later, download is not required if you already have the file. From the installed copy:
+If you are not an administrator and those packages are already installed, the same command skips apt and continues. You can also force that with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash -s -- --no-apt
+```
+
+If something is still missing, it prints the exact `sudo apt-get install` line for an administrator and stops.
+
+To remove the app later:
 
 ```bash
 bash ~/.local/share/grokbot-voice/install-mint.sh --uninstall
 ```
 
-That removes the program and the menu entry. Your settings and xAI key stay.
+That removes the program, the menu entry, and the desktop icon. Your settings, Piper voices, and xAI key stay.
+
+Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it. Say **Moya mute** or **Moya sleep** to stop your microphone from reaching Grok Bot, and **Moya wake**, **Moya wake up**, **Moya listen**, or **Moya un mute** to turn it back on. The single word "unmute" is not a command.
 
 Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
 
@@ -175,19 +185,11 @@ python3 -m pip install -r requirements-linux.txt
 python3 grok_voice.py
 ```
 
-### 3. Optional: a Piper voice
+### 3. Piper voices
 
-Piper sounds more natural than espeak-ng and stays on your computer. The Ubuntu package named `piper` is a different program (a game controller tool), so do not install that.
+The installer downloads Piper and three voices into `~/.config/grokbot-voice/piper`: Jenny, Amy, and Lessac. Jenny is selected the first time you start. Open the gear and click the voice name to pick another one. Files that are already there are left alone, so running the installer again does not download them twice.
 
-1. Download the Linux x86_64 Piper release from <https://github.com/rhasspy/piper/releases> and unpack it.
-2. Download a voice from <https://huggingface.co/rhasspy/piper-voices>: both the `.onnx` file and the matching `.onnx.json` file. Jenny is an easy first voice (`en_GB-jenny_dioco-medium`).
-3. Put the `piper` program and the two voice files in:
-
-   `~/.config/grokbot-voice/piper`
-
-4. Restart Grokbot Voice. The voice shows up in the gear menu.
-
-You can point at a Piper program somewhere else with the `GROKBOT_PIPER` environment variable.
+The Ubuntu package named `piper` is a game-controller tool, not this speech program. The installer does not use that package. You can point at a different Piper program with the `GROKBOT_PIPER` environment variable.
 
 ### 4. The xAI key
 

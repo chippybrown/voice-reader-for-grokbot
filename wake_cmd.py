@@ -2,13 +2,16 @@
 # No audio libraries here, so the rules can be tested without a mic or Vosk.
 import os
 
+# The small English Vosk model has no "unmute". These phrases use words it knows.
 PHRASES = {
     "moya sleep": "mute",
     "moya mute": "mute",
     "moya wake": "unmute",
-    "moya unmute": "unmute",
+    "moya wake up": "unmute",
+    "moya listen": "unmute",
+    "moya un mute": "unmute",
 }
-GRAMMAR = '["moya sleep", "moya mute", "moya wake", "moya unmute", "[unk]"]'
+GRAMMAR = '["moya sleep", "moya mute", "moya wake", "moya wake up", "moya listen", "moya un mute", "[unk]"]'
 MODEL_NAME = "vosk-model-small-en-us-0.15"
 MODEL_URL = "https://alphacephei.com/vosk/models/%s.zip" % MODEL_NAME
 # Ignore the mic briefly after we speak or chime, so the tail cannot retrigger.

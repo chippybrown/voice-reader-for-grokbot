@@ -48,6 +48,54 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_outbound_agent_notes_are_not_replies(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.agent-123",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-9","toAgent":{"id":"cloud"},"seq":1,"timestampMs":1700000000000,"content":"ask the other agent"},'
+                  '{"kind":"message","role":"assistant","id":"note-1","seq":2,"timestampMs":1700000001000,"content":"a private aside"},'
+                  '{"kind":"send-message","id":"reply-1","seq":3,"timestampMs":1700000002000,"message":{"type":"text","content":"Here is what I found."}}'
+                  ']}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("Here is what I found.", spoken)
+            self.assertIn("a private aside", spoken)
+            self.assertNotIn("ask the other agent", spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_rewrite_does_not_reread_old_replies(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            key = "sand.client.slice.account.a.transcript.replicas.agent-123"
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"m1","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"first"}},'
+                  '{"kind":"send-message","id":"m2","seq":2,"timestampMs":1700000001000,"message":{"type":"text","content":"second"}}'
+                  ']}}')
+            lines, _names, keylists, active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Compact the slice: drop the first reply, renumber seq, add a new one.
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"m2","seq":9,"timestampMs":1700000001000,"message":{"type":"text","content":"second"}},'
+                  '{"kind":"send-message","id":"m3","seq":10,"timestampMs":1700000002000,"message":{"type":"text","content":"third"}}'
+                  ']}}')
+            lines, _names, keylists, active2 = grok_store.reply_snapshot(store)
+            self.assertEqual(active, active2)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [
+                line for line in lines if "third" in line
+            ])
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+        finally:
+            shutil.rmtree(root)
+
     def test_active_chat_is_the_newest_file(self):
         root = tempfile.mkdtemp()
         try:

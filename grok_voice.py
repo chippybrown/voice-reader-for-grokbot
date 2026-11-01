@@ -78,6 +78,13 @@ try:
 except Exception:
     pass
 saved = next((i for i, ch in enumerate(choices) if ch[0] == saved_label), 0)
+# A fresh Linux install speaks with Piper Jenny (then Amy) instead of espeak-ng.
+if not saved_label and sys.platform != "win32":
+    for prefix in ("Jenny", "Amy"):
+        hit = next((i for i, ch in enumerate(choices) if ch[1] == "piper" and ch[0].startswith(prefix)), None)
+        if hit is not None:
+            saved = hit
+            break
 use_choice(saved)
 
 def log(msg):
@@ -230,14 +237,35 @@ def announce(reply):
     return text
 
 _logged_store = False
-def bot_replies():
+def chat_snapshot():
+    """Visible replies, stable keys, and the Linux transcript path (None on Windows)."""
     global _logged_store
     if not _logged_store:
         _logged_store = True
         log("chat folder: %s" % (platform.persistence_dir() or "(not found)"))
-    lines, names = platform.read_chat()
+    lines, names, keylists, active = platform.read_snapshot()
     remember_names(names)
-    return [line for line in lines if announce(line).strip()]
+    kept_lines = []
+    kept_keys = []
+    for line, keys in zip(lines, keylists):
+        if announce(line).strip():
+            kept_lines.append(line)
+            kept_keys.append(tuple(keys))
+    return kept_lines, kept_keys, active
+
+def bot_replies():
+    lines, _keys, _active = chat_snapshot()
+    return lines
+
+def absorb_current():
+    """Mark whatever is in the chat now as already read. Returns those lines."""
+    lines, keys, active = chat_snapshot()
+    for keyset in keys:
+        state["seen"].update(keyset)
+    if active is not None:
+        state["file_key"] = active
+    state["prev_cur"] = list(lines)
+    return lines
 
 platform.install_hotkeys(flags)
 
@@ -251,13 +279,19 @@ root.title("Grokbot Voice")
 platform.apply_icon(root)
 root.overrideredirect(True)
 root.attributes("-topmost", True)
-root.attributes("-transparentcolor", KEY)
-root.configure(bg=KEY)
+# Windows punches the magenta key color out so the rounded corners are transparent.
+# Linux Tk has no -transparentcolor. Use the bar color instead of leaving magenta corners.
+try:
+    root.attributes("-transparentcolor", KEY)
+    _bar_bg = KEY
+except tk.TclError:
+    _bar_bg = BG
+root.configure(bg=_bar_bg)
 sw = root.winfo_screenwidth()
 sh = root.winfo_screenheight()
 root.geometry(f"{W}x{H}+{int(sw - W - sw * 0.10)}+{int(sh - H - sh * 0.05)}")
 
-c = tk.Canvas(root, width=W, height=H, bg=KEY, highlightthickness=0)
+c = tk.Canvas(root, width=W, height=H, bg=_bar_bg, highlightthickness=0)
 c.pack()
 def rounded(x1, y1, x2, y2, r, **kw):
     pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y2-r, x2, y2, x2-r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y1+r, x1, y1]
@@ -433,8 +467,12 @@ def key_dialog():
 menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
 
 # ---------- watcher loop ----------
-_first = bot_replies()
-state = {"seen": set(_first), "history": list(_first), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0}
+_lines, _keys, _active = chat_snapshot()
+_seen = set()
+for _keyset in _keys:
+    _seen.update(_keyset)
+state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
+         "file_key": _active, "prev_cur": list(_lines)}
 
 def commands_path():
     return os.path.join(platform.config_dir(), "voice-commands.json")
@@ -532,10 +570,9 @@ def tick():
         say("")
     if flags["play"]:
         flags["play"] = False
-        if state["stopped"]:     # back to watching; anything that came in while stopped is skipped
+        if state["stopped"]:     # back to watching; anything already on screen is skipped
             state["stopped"] = False
-            state["seen"].update(bot_replies())
-            state["prev_cur"] = list(bot_replies())
+            state["history"] = absorb_current()
     if flags["back"]:
         flags["back"] = False
         history = state["history"]
@@ -561,41 +598,62 @@ def tick():
             pause_audio()       # silent; remembers the spot in this reply
         else:
             resume_audio()      # carry on from that spot, then keep watching
-            state["seen"].update(bot_replies())   # skip what came in while paused
+            absorb_current()    # skip what came in while paused
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
-            cur = bot_replies()
+            cur, keys, active = chat_snapshot()
             seen = state["seen"]
-            known = [i for i, reply in enumerate(cur) if reply in seen]
-            prev = state.get("prev_cur", [])
-            if cur:
-                state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
-            def who(reply):
-                return next((name for name in BOT_NAMES if reply.startswith(name + " ")), reply.partition(" ")[0])
-            switched = bool(cur) and (
-                (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
-                or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
-                or (not known and (prev or len(cur) > 1)))
-            if switched:
-                # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
-                seen.update(cur)
-                state["history"] = list(cur)
-                state["queue"].clear()
-                # read only the bottom reply of the new chat; Back steps up from there
-                state["pos"] = len(cur) - 1
-                say(announce(cur[-1]))
-            else:
-                last_known = known[-1] if known else -1
-                for i, reply in enumerate(cur):
-                    if reply in seen:
-                        continue
-                    seen.add(reply)
-                    if i < last_known:
-                        continue   # older message (scrolled into view), not new
-                    state["history"].append(reply)
+            if active is not None:
+                # Linux files: a new or rewritten chat is a baseline, like Stop then Play.
+                # Only ids that show up on a later look are read. Position is ignored.
+                if active != state.get("file_key"):
+                    state["file_key"] = active
+                    for keyset in keys:
+                        seen.update(keyset)
+                    state["history"] = list(cur)
+                    state["prev_cur"] = list(cur)
+                    state["queue"].clear()
                     state["pos"] = None
-                    state["queue"].append(reply)
+                else:
+                    for line, keyset in zip(cur, keys):
+                        if any(key in seen for key in keyset):
+                            seen.update(keyset)
+                            continue
+                        seen.update(keyset)
+                        state["history"].append(line)
+                        state["pos"] = None
+                        state["queue"].append(line)
+            else:
+                known = [i for i, reply in enumerate(cur) if reply in seen]
+                prev = state.get("prev_cur", [])
+                if cur:
+                    state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
+                def who(reply):
+                    return next((name for name in BOT_NAMES if reply.startswith(name + " ")), reply.partition(" ")[0])
+                switched = bool(cur) and (
+                    (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
+                    or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
+                    or (not known and (prev or len(cur) > 1)))
+                if switched:
+                    # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
+                    seen.update(cur)
+                    state["history"] = list(cur)
+                    state["queue"].clear()
+                    # read only the bottom reply of the new chat; Back steps up from there
+                    state["pos"] = len(cur) - 1
+                    say(announce(cur[-1]))
+                else:
+                    last_known = known[-1] if known else -1
+                    for i, reply in enumerate(cur):
+                        if reply in seen:
+                            continue
+                        seen.add(reply)
+                        if i < last_known:
+                            continue   # older message (scrolled into view), not new
+                        state["history"].append(reply)
+                        state["pos"] = None
+                        state["queue"].append(reply)
         except Exception:
             pass
     speaking = is_speaking()
@@ -612,7 +670,12 @@ def tick():
         status.set(new)
     root.after(200, tick)
 
-if commands_enabled():
-    start_voice_commands()
-root.after(200, tick)
-root.mainloop()
+if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
+    root.update_idletasks()
+    root.update()
+    root.destroy()
+else:
+    if commands_enabled():
+        start_voice_commands()
+    root.after(200, tick)
+    root.mainloop()

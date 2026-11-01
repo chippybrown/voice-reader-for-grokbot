@@ -273,10 +273,16 @@ def stop_all_audio():
 
 
 def read_chat():
+    lines, names, _keys, _active = read_snapshot()
+    return lines, names
+
+
+def read_snapshot():
+    """Lines, names, stable keys, and the active transcript path."""
     directory = persistence_dir()
     if not directory:
-        return [], []
-    return grok_store.reply_lines(directory)
+        return [], [], [], None
+    return grok_store.reply_snapshot(directory)
 
 
 def install_hotkeys(flags):

@@ -22,11 +22,15 @@ Source Output #7
 
 
 class WakeTests(unittest.TestCase):
-    def test_only_the_four_phrases(self):
+    def test_only_the_known_phrases(self):
         self.assertEqual(wake_cmd.phrase_action("Moya mute"), "mute")
         self.assertEqual(wake_cmd.phrase_action("  moya   sleep "), "mute")
         self.assertEqual(wake_cmd.phrase_action("moya wake"), "unmute")
-        self.assertEqual(wake_cmd.phrase_action("moya unmute"), "unmute")
+        self.assertEqual(wake_cmd.phrase_action("moya wake up"), "unmute")
+        self.assertEqual(wake_cmd.phrase_action("moya listen"), "unmute")
+        self.assertEqual(wake_cmd.phrase_action("moya un mute"), "unmute")
+        self.assertIsNone(wake_cmd.phrase_action("moya unmute"))
+        self.assertNotIn("unmute", wake_cmd.GRAMMAR)
         self.assertIsNone(wake_cmd.phrase_action(""))
         self.assertIsNone(wake_cmd.phrase_action("[unk]"))
         self.assertIsNone(wake_cmd.phrase_action("moya please mute"))
