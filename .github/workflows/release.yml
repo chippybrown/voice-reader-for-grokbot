@@ -26,12 +26,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Read the app version
+        id: appver
+        shell: bash
+        run: echo "version=$(python -c 'import version; print(version.VERSION)')" >> "$GITHUB_OUTPUT"
+
       - name: Build Grokbot Voice
-        run: pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
+        run: pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs grok_voice.py
 
       - name: Attach the executable to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: Grokbot Voice v${{ steps.appver.outputs.version }}
           fail_on_unmatched_files: true
           files: |
             dist/Grokbot Voice.exe
@@ -82,6 +88,10 @@ jobs:
           if [ -z "$desk" ] || [ "$desk" = /tmp/mint-home ]; then desk=/tmp/mint-home/Desktop; fi
           test -x "$desk/grokbot-voice.desktop"
 
+      - name: Read the app version
+        id: appver
+        run: echo "version=$(/tmp/venv/bin/python -c 'import version; print(version.VERSION)')" >> "$GITHUB_OUTPUT"
+
       - name: Test the chat reader
         run: /tmp/venv/bin/python -m unittest discover -s tests -v
 
@@ -90,6 +100,7 @@ jobs:
           /tmp/venv/bin/pyinstaller --noconfirm --onefile --noconsole --name grokbot-voice \
             --add-data "assets/icon.png:." \
             --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
+            --hidden-import version --hidden-import bot_prefs \
             --collect-all keyring --collect-all secretstorage --collect-all pynput \
             grok_voice.py
           cp dist/grokbot-voice dist/grokbot-voice-linux-x86_64
@@ -119,6 +130,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: Grokbot Voice v${{ steps.appver.outputs.version }}
           fail_on_unmatched_files: true
           files: |
             dist/Grokbot-Voice-x86_64.AppImage

@@ -17,8 +17,10 @@ if sys.platform == "win32":
 else:
     import platform_linux as platform
 
+import bot_prefs
 import grok_store
 from audio_util import write_pcm_wav
+from version import APP_TITLE
 
 SAVED = platform.saved_voice_path()
 TUNE_FILE = platform.tune_path()
@@ -56,11 +58,21 @@ try:
 except Exception:
     tune_all = {}
 
-def tune():   # current voice's {"speed": 0.5..2.0, "pitch": -10..10}
-    saved = tune_all.setdefault(speak_state.get("label", ""), {})
+def voice_tune(label):
+    """Speed and pitch saved for one voice label."""
+    saved = tune_all.setdefault(label or "", {})
     saved.setdefault("speed", 1.0)
     saved.setdefault("pitch", 0)
     return saved
+
+def tune():   # voice in use, or this bot's own speed and pitch when set
+    base = voice_tune(speak_state.get("label", ""))
+    if "bot_speed" not in speak_state and "bot_pitch" not in speak_state:
+        return base
+    return {
+        "speed": speak_state.get("bot_speed", base["speed"]),
+        "pitch": speak_state.get("bot_pitch", base["pitch"]),
+    }
 
 def save_tune():
     os.makedirs(os.path.dirname(TUNE_FILE), exist_ok=True)
@@ -86,6 +98,44 @@ if not saved_label and sys.platform != "win32":
             saved = hit
             break
 use_choice(saved)
+
+BOT_FILE = os.path.join(platform.config_dir(), "bot settings.json")
+
+def load_bot_prefs():
+    try:
+        return bot_prefs.normalize(json.load(open(BOT_FILE, encoding="utf-8")))
+    except Exception:
+        return bot_prefs.fresh()
+
+bot_state = load_bot_prefs()
+
+def save_bot_prefs():
+    os.makedirs(os.path.dirname(BOT_FILE), exist_ok=True)
+    json.dump(bot_state, open(BOT_FILE, "w", encoding="utf-8"), indent=1)
+
+def saved_voice_label():
+    try:
+        return open(SAVED, encoding="utf-8").read().strip()
+    except Exception:
+        return choices[saved][0] if choices else ""
+
+def apply_bot_voice(bot):
+    """The open chat's bot picks the voice. No pick uses the default voice."""
+    voice, speed, pitch = bot_prefs.voice_choice(bot_state, bot)
+    label = voice or saved_voice_label()
+    idx = next((i for i, ch in enumerate(choices) if ch[0] == label), None)
+    if idx is None:
+        idx = saved
+        speed = pitch = None
+    use_choice(idx)
+    if speed is None:
+        speak_state.pop("bot_speed", None)
+    else:
+        speak_state["bot_speed"] = float(speed)
+    if pitch is None:
+        speak_state.pop("bot_pitch", None)
+    else:
+        speak_state["bot_pitch"] = int(pitch)
 
 def log(msg):
     try:
@@ -153,7 +203,8 @@ def piper_job(text, token, wait):
         if token == speak_state["token"]:
             speak_state["making"] = False
 
-def say(text, wait=False):
+def say(text, wait=False, bot=None):
+    apply_bot_voice(bot)
     if text:
         log("speak [%s] %s" % (speak_state.get("label", "?"), text[:60].replace("\n", " ")))
     stop_all()
@@ -214,12 +265,25 @@ TIME_RE = re.compile(r"\b(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+)?(?:\w{3,9}\
 
 def remember_names(names):
     changed = False
+    fresh_names = []
     for name in names:
-        if name and name not in BOT_NAMES:
-            BOT_NAMES.append(name)
+        label = " ".join(str(name or "").split())
+        if not label:
+            continue
+        fresh_names.append(label)
+        if label not in BOT_NAMES:
+            BOT_NAMES.append(label)
             changed = True
     if changed:
         BOT_NAMES.sort(key=len, reverse=True)
+    before = set(bot_state["bots"])
+    bot_prefs.note_bots(bot_state, fresh_names)
+    if set(bot_state["bots"]) != before:
+        save_bot_prefs()
+
+def bot_of(reply):
+    """The bot named at the start of a stored reply line."""
+    return next((name for name in BOT_NAMES if reply.startswith(name + " ")), "")
 
 def announce(reply):
     """'Cameron 6:50 AM Hello there' -> 'Hello there' (no bot name, no time)"""
@@ -273,9 +337,9 @@ platform.install_hotkeys(flags)
 platform.hide_console()
 
 BG, PANEL, FG, DIM, ACCENT, RED, KEY = "#1f2430", "#2a3040", "#e8ecf4", "#8a93a6", "#4cc38a", "#ff6b6b", "#ff00fe"
-W, H = 300, 74
+W, H = 460, 74
 root = tk.Tk()
-root.title("Grokbot Voice")
+root.title(APP_TITLE)
 platform.apply_icon(root)
 root.overrideredirect(True)
 root.attributes("-topmost", True)
@@ -299,9 +363,9 @@ def rounded(x1, y1, x2, y2, r, **kw):
 rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
 
 # title + status
-c.create_text(16, 16, text="🔊  Grokbot Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
-dot = c.create_oval(138, 11, 148, 21, fill=ACCENT, outline="")
-stxt = c.create_text(152, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
+c.create_text(16, 16, text="🔊  " + APP_TITLE, anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
+dot = c.create_oval(248, 11, 258, 21, fill=ACCENT, outline="")
+stxt = c.create_text(264, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
 LABELS = {"Stopped": "Not monitoring", "Paused": "Reading paused"}
 btn = {}   # name -> (circle, glyph)
@@ -334,23 +398,50 @@ c.bind("<Button-1>", press)
 c.bind("<B1-Motion>", move)
 
 # round icon buttons
+tip_box = {"win": None}
+def hide_tip():
+    win = tip_box.get("win")
+    if win is not None:
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        tip_box["win"] = None
+def show_tip(event, text):
+    hide_tip()
+    tip = tk.Toplevel(root)
+    tip.overrideredirect(True)
+    tip.attributes("-topmost", True)
+    tip.configure(bg="#11151c", highlightthickness=1, highlightbackground="#3a4256")
+    tk.Label(tip, text=text, bg="#11151c", fg=FG, font=("Segoe UI", 9), padx=8, pady=4).pack()
+    tip.update_idletasks()
+    x = event.x_root + 12
+    y = event.y_root - tip.winfo_height() - 10
+    tip.geometry("+%d+%d" % (x, y))
+    tip_box["win"] = tip
 def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12, name=None):
     circle = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="")
     label = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size))
     if name:
         btn[name] = (circle, label)
+    def enter(e, circle=circle, tip=tip):
+        c.itemconfig(circle, fill="#3a4256")
+        show_tip(e, tip)
+    def leave(e, circle=circle):
+        hide_tip()
+        show_status()
     for item in (circle, label):
-        c.tag_bind(item, "<Enter>", lambda e, circle=circle, tip=tip: (c.itemconfig(circle, fill="#3a4256"), c.itemconfig(stxt, text=tip)))
-        c.tag_bind(item, "<Leave>", lambda e, circle=circle: show_status())
-        c.tag_bind(item, "<Button-1>", lambda e, action=action: action())
-icon_button(70,  "\u23EE", "Back", lambda: flags.update(back=True))
-icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True), name="stop")
-icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True), name="pause")
-icon_button(190, "\u25B6", "Play / Resume", lambda: flags.update(pause=False, play=True), ACCENT, name="play")
+        c.tag_bind(item, "<Enter>", enter)
+        c.tag_bind(item, "<Leave>", leave)
+        c.tag_bind(item, "<Button-1>", lambda e, action=action: (hide_tip(), action()))
+icon_button(120, "\u23EE", bot_prefs.TOOLBAR_TIPS["back"], lambda: flags.update(back=True), name="back")
+icon_button(165, "\u25A0", bot_prefs.TOOLBAR_TIPS["stop"], lambda: flags.update(stop=True), name="stop")
+icon_button(210, "\u275A\u275A", bot_prefs.TOOLBAR_TIPS["pause"], lambda: flags.update(pause=True), name="pause")
+icon_button(255, "\u25B6", bot_prefs.TOOLBAR_TIPS["play"], lambda: flags.update(pause=False, play=True), ACCENT, name="play")
 show_status()
-icon_button(230, "\u23ED", "Next", lambda: flags.update(skip=True))
-icon_button(W-50, "\u2699", "Settings", lambda: open_tuner(), y=17, r=11, size=10)
-icon_button(W-22, "\u23FB", "Turn off", lambda: flags.update(quit=True), RED, y=17, r=11, size=10)
+icon_button(300, "\u23ED", bot_prefs.TOOLBAR_TIPS["next"], lambda: flags.update(skip=True), name="next")
+icon_button(W-50, "\u2699", bot_prefs.TOOLBAR_TIPS["gear"], lambda: open_tuner(), y=17, r=11, size=10, name="gear")
+icon_button(W-22, "\u23FB", bot_prefs.TOOLBAR_TIPS["power"], lambda: flags.update(quit=True), RED, y=17, r=11, size=10, name="power")
 
 tuner = {"win": None}
 def open_tuner():
@@ -358,43 +449,115 @@ def open_tuner():
         tuner["win"].destroy()
         tuner["win"] = None
         return
-    settings = tune()
+    default_label = saved_voice_label() or (choices[saved][0] if choices else "")
+    settings = voice_tune(default_label)
     win = tk.Toplevel(root)
     win.overrideredirect(True)
     win.attributes("-topmost", True)
     win.configure(bg=BG, highlightthickness=1, highlightbackground="#3a4256")
-    tk.Label(win, text="\u2699  Settings", bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
-    tk.Label(win, text="Voice", bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
-    vb = tk.Button(win, text="\U0001F3A4 " + speak_state["label"] + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
+    tk.Label(win, text=APP_TITLE, bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
+    tk.Label(win, text="Default", bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
+    vb = tk.Button(win, text="\U0001F3A4 " + default_label + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                    relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9), anchor="w", width=28)
     vb.configure(command=lambda: menu.tk_popup(vb.winfo_rootx(), vb.winfo_rooty() + vb.winfo_height()))
     vb.grid(row=4, column=1, padx=(0, 10), pady=(4, 2), sticky="w")
     def slider(row, label, lo, hi, res, val, key):
-        tk.Label(win, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=row, column=0, padx=(10, 0))
-        sc = tk.Scale(win, from_=lo, to=hi, resolution=res, orient="horizontal", length=200,
+        tk.Label(win, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=row, column=0, padx=(10, 0))
+        sc = tk.Scale(win, from_=lo, to=hi, resolution=res, orient="horizontal", length=220,
                       bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0,
                       activebackground=ACCENT, sliderrelief="flat", font=("Segoe UI", 8))
         sc.set(val)
         sc.grid(row=row, column=1, padx=(0, 10))
-        def changed(value):
-            tune()[key] = float(value) if key == "speed" else int(float(value))
+        def changed(value, key=key):
+            voice_tune(default_label)[key] = float(value) if key == "speed" else int(float(value))
             save_tune()
         sc.configure(command=changed)
     slider(1, "Speed", 0.5, 2.0, 0.1, settings["speed"], "speed")
     slider(2, "Pitch", -10, 10, 1, settings["pitch"], "pitch")
+    new_var = tk.BooleanVar(value=bool(bot_state.get("new_bots", True)))
+    read_vars = {}
+    def on_new():
+        bot_state["new_bots"] = bool(new_var.get())
+        save_bot_prefs()
+        for name, var in read_vars.items():
+            row = bot_state["bots"].get(name) or {}
+            if "read" not in row:
+                var.set(bot_prefs.allows_auto(bot_state, name))
+    tk.Checkbutton(win, text="New bots on by default", variable=new_var, command=on_new,
+                   bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                   font=("Segoe UI", 9), anchor="w").grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 0))
+    tk.Label(win, text="Bots", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(row=7, column=0, columnspan=2, sticky="w", padx=10)
+    holder = tk.Frame(win, bg=BG)
+    holder.grid(row=8, column=0, columnspan=2, sticky="ew", padx=8)
+    box = tk.Canvas(holder, bg=BG, highlightthickness=0, height=160, width=420)
+    box.pack(side="left", fill="both")
+    inner = tk.Frame(box, bg=BG)
+    box.create_window((0, 0), window=inner, anchor="nw")
+    def fit(_event=None):
+        box.configure(scrollregion=box.bbox("all"))
+    inner.bind("<Configure>", fit)
+    names = sorted(bot_state["bots"])
+    if not names:
+        tk.Label(inner, text="Bots show up here after a chat is seen.", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=4, pady=4)
+    voice_labels = ["Default voice"] + [ch[0] for ch in choices]
+    for name in names:
+        row = bot_state["bots"].setdefault(name, {})
+        block = tk.Frame(inner, bg=BG)
+        block.pack(fill="x", pady=3)
+        read_var = tk.BooleanVar(value=bot_prefs.allows_auto(bot_state, name))
+        read_vars[name] = read_var
+        def on_read(name=name, var=read_var):
+            bot_state["bots"].setdefault(name, {})["read"] = bool(var.get())
+            save_bot_prefs()
+        tk.Checkbutton(block, text=name, variable=read_var, command=on_read,
+                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                       font=("Segoe UI", 9), anchor="w").pack(anchor="w")
+        picked = (row.get("voice") or "").strip() or "Default voice"
+        voice_btn = tk.Button(block, text=picked + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
+                               relief="flat", bd=0, padx=8, pady=2, font=("Segoe UI", 8), anchor="w")
+        menu_b = tk.Menu(win, tearoff=0, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG, font=("Segoe UI", 8))
+        def choose(label, name=name, button=voice_btn):
+            stored = "" if label == "Default voice" else label
+            bot_state["bots"].setdefault(name, {})["voice"] = stored
+            save_bot_prefs()
+            button.configure(text=(stored or "Default voice") + "  \u25BE")
+        for label in voice_labels:
+            menu_b.add_command(label=label, command=lambda label=label: choose(label))
+        voice_btn.configure(command=lambda menu_b=menu_b, voice_btn=voice_btn: menu_b.tk_popup(voice_btn.winfo_rootx(), voice_btn.winfo_rooty() + voice_btn.winfo_height()))
+        voice_btn.pack(anchor="w", padx=18)
+        speeds = tk.Frame(block, bg=BG)
+        speeds.pack(fill="x", padx=18)
+        base = voice_tune(picked if picked != "Default voice" else default_label)
+        for key, lo, hi, res, caption in (("speed", 0.5, 2.0, 0.1, "Speed"), ("pitch", -10, 10, 1, "Pitch")):
+            tk.Label(speeds, text=caption, bg=BG, fg=DIM, font=("Segoe UI", 8), width=6, anchor="w").pack(side="left")
+            start = row.get(key)
+            if not isinstance(start, (int, float)):
+                start = base[key]
+            sc = tk.Scale(speeds, from_=lo, to=hi, resolution=res, orient="horizontal", length=120,
+                          bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0,
+                          activebackground=ACCENT, sliderrelief="flat", font=("Segoe UI", 7))
+            sc.set(start)
+            def changed(value, name=name, key=key):
+                number = float(value) if key == "speed" else int(float(value))
+                bot_state["bots"].setdefault(name, {})[key] = number
+                save_bot_prefs()
+            sc.configure(command=changed)
+            sc.pack(side="left")
+    tk.Label(win, text="Unchecked bots are not read aloud. Back, Next, and Play still speak them.",
+             bg=BG, fg=DIM, font=("Segoe UI", 8), wraplength=420, justify="left").grid(row=9, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 0))
     bar2 = tk.Frame(win, bg=BG)
-    bar2.grid(row=5, column=0, columnspan=2, pady=(6, 8))
+    bar2.grid(row=10, column=0, columnspan=2, pady=(6, 8))
     def reset():
-        tune_all[speak_state["label"]] = {"speed": 1.0, "pitch": 0}
+        tune_all[default_label] = {"speed": 1.0, "pitch": 0}
         save_tune()
         win.destroy()
         tuner["win"] = None
         open_tuner()
-    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (win.destroy(), tuner.update(win=None)))):
+    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
         tk.Button(bar2, text=txt, command=cmd, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                   relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9)).pack(side="left", padx=4)
     win.update_idletasks()
-    win.geometry(f"+{root.winfo_x() + W - win.winfo_width()}+{root.winfo_y() - win.winfo_height() - 8}")
+    win.geometry(f"+{root.winfo_x() + W - win.winfo_width()}+{max(0, root.winfo_y() - win.winfo_height() - 8)}")
     tuner["win"] = win
 
 # voice switcher
@@ -460,25 +623,32 @@ def tick():
         flags["pause"] = False
         state["paused"] = False
         say("")
+    manual = None
     if flags["play"]:
         flags["play"] = False
+        resuming = state["paused"]
         if state["stopped"]:     # back to watching; anything already on screen is skipped
             state["stopped"] = False
             state["history"] = absorb_current()
+        history = state["history"]
+        if history and not resuming:
+            shown = history[-1] if state["pos"] is None else history[state["pos"]]
+            if not bot_prefs.allows_auto(bot_state, bot_of(shown)):
+                manual = shown
     if flags["back"]:
         flags["back"] = False
         history = state["history"]
         if history:
             state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
             state["queue"].clear()
-            say(announce(history[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
     if flags["skip"]:   # Next
         flags["skip"] = False
         history = state["history"]
         if state["pos"] is not None and state["pos"] < len(history) - 1:
             state["pos"] += 1          # step forward through history
             state["queue"].clear()
-            say(announce(history[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
         else:
             # stop the current reply now and go back to watching for a new one
             state["queue"].clear()
@@ -491,6 +661,8 @@ def tick():
         else:
             resume_audio()      # carry on from that spot, then keep watching
             absorb_current()    # skip what came in while paused
+    if manual:
+        say(announce(manual), bot=bot_of(manual))
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
@@ -538,7 +710,8 @@ def tick():
                     state["queue"].clear()
                     # read only the bottom reply of the new chat; Back steps up from there
                     state["pos"] = len(cur) - 1
-                    say(announce(cur[-1]))
+                    if bot_prefs.allows_auto(bot_state, bot_of(cur[-1])):
+                        say(announce(cur[-1]), bot=bot_of(cur[-1]))
                 else:
                     last_known = known[-1] if known else -1
                     for i, reply in enumerate(cur):
@@ -554,8 +727,11 @@ def tick():
             pass
     speaking = is_speaking()
     if state["queue"] and not speaking and not state["paused"] and not state["stopped"]:
-        say(announce(state["queue"].pop(0)))
-        speaking = True
+        pending = state["queue"].pop(0)
+        who = bot_of(pending)
+        if bot_prefs.allows_auto(bot_state, who):
+            say(announce(pending), bot=who)
+            speaking = True
     if state["stopped"] and not speaking:
         new = "Stopped"
     elif state["paused"]:

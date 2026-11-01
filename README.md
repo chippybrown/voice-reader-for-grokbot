@@ -61,7 +61,7 @@ The buttons stay quiet. Only **Test** in Settings speaks. Everything else just d
 - **Pause** holds in the middle of the reply and remembers the spot. The Pause button turns amber, and the status says **Reading paused**.
 - **Play** is the green button. After Stop, it starts monitoring again. Replies that arrived while monitoring was off are skipped. After Pause, Play continues from the spot where reading held.
 - **Next** steps forward through earlier replies. On the newest reply, Next stops and waits for the next new one.
-- **Gear** opens Settings. Choose a voice, then set its speed and pitch. Each voice remembers its own settings. The Grok voice uses the speed (xAI keeps it in a comfortable range). Pitch applies to Windows and Piper voices. **Test** plays a short sample, **Reset** puts that voice back to normal, and **Done** closes the panel. Open the voice list there and choose **Set xAI API key...** when you want the Grok voice.
+- **Gear** opens Settings. The default voice has its own speed and pitch. Each voice remembers those. Below that, every bot that has been seen has a checkbox, a voice, and its own speed and pitch. A bot with no voice picked uses the default voice. Uncheck a bot and its new replies stay quiet, even in the open chat. **Back**, **Next**, and **Play** still speak that bot. **New bots on by default** is on, so a bot you have not set yet is read aloud. The Grok voice uses the speed (xAI keeps it in a comfortable range). Pitch applies to Windows and Piper voices. **Test** plays a short sample of the default voice, **Reset** puts that voice back to normal, and **Done** closes the panel. Open the voice list there and choose **Set xAI API key...** when you want the Grok voice. Hover any toolbar button for a short description. Stop, Pause, and Turn off include their keyboard shortcut.
 - **Status light** is green for Watching, blue for Reading, amber for Reading paused, and red for Not monitoring.
 - **Turn off** is the red button in the top right. It closes Grokbot Voice.
 
@@ -85,11 +85,14 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 
 - `%APPDATA%\Grok Reader voice.txt` remembers the voice you picked
 - `%APPDATA%\Grok Voice\voice settings.json` remembers speed and pitch for each voice
+- `%APPDATA%\Grok Voice\bot settings.json` remembers each bot's voice, speed, pitch, and whether it is read aloud
 - `%APPDATA%\Grok Voice\piper` is where Piper voice files go
 - `%APPDATA%\Grok Voice\xai key.bin` is your xAI API key, encrypted for your Windows account
 - `%APPDATA%\Grok Voice\chief of staff.txt` is optional. Put a bot's name on the first line if the chief of staff should be someone other than Moya
 
-On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
+On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, per-bot voices, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
+
+The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.0**.
 
 ## Build from source
 
@@ -97,14 +100,14 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
 
 On Linux the matching build is in [Linux Mint](#linux-mint). A version tag also builds `Grokbot-Voice-x86_64.AppImage` and `grokbot-voice-linux-x86_64` on Ubuntu 22.04.
 
-Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release, plus the Linux files. You can also start the workflow by hand from the Actions tab.
+Pushing a version tag such as `v1.3.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release, plus the Linux files. The release name is taken from `version.py`. You can also start the workflow by hand from the Actions tab.
 
 ## Linux Mint
 
@@ -209,6 +212,7 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
+  --hidden-import version --hidden-import bot_prefs \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh
