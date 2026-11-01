@@ -1,0 +1,389 @@
+# The chat-file reader is what Linux uses instead of Windows UI Automation.
+import os
+import shutil
+import stat
+import tempfile
+import unittest
+
+import grok_store
+import platform_linux
+
+
+def _blob(directory, key, payload):
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, grok_store.encode_base32(key) + ".blob")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    return path
+
+
+class StoreTests(unittest.TestCase):
+    def test_base32_roundtrip(self):
+        key = "sand.client.slice.account.grok|user_1.transcript.replicas.agent-123"
+        self.assertEqual(grok_store.decode_base32(grok_store.encode_base32(key)), key)
+        self.assertIsNone(grok_store.decode_base32("not slice data!!!"))
+
+    def test_replies_skip_the_user_and_widgets(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"agent-123","name":"Moya"}]}}')
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.agent-123",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","seq":1,"timestampMs":1700000000000,"content":"please look at this"},'
+                  '{"kind":"send-message","seq":2,"timestampMs":1700000001000,"message":{"type":"text","content":"Here is the answer."}},'
+                  '{"kind":"send-message","seq":3,"timestampMs":1700000001500,"message":{"type":"widget","content":"do not read this button"}},'
+                  '{"kind":"message","role":"assistant","seq":4,"timestampMs":1700000002000,"content":"And another line."}'
+                  ']}}')
+            lines, names = grok_store.reply_lines(store)
+            self.assertIn("Moya", names)
+            self.assertEqual(len(lines), 1)
+            self.assertTrue(lines[0].startswith("Moya "))
+            self.assertIn("#2 ", lines[0])
+            self.assertIn("Here is the answer.", lines[0])
+            self.assertNotIn("And another line.", " ".join(lines))
+            self.assertNotIn("please look", " ".join(lines))
+            self.assertNotIn("do not read", " ".join(lines))
+        finally:
+            shutil.rmtree(root)
+
+    def test_outbound_agent_notes_are_not_replies(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.agent-123",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-9","toAgent":{"id":"cloud"},"seq":1,"timestampMs":1700000000000,"content":"ask the other agent"},'
+                  '{"kind":"message","role":"assistant","id":"note-1","seq":2,"timestampMs":1700000001000,"content":"a private aside"},'
+                  '{"kind":"send-message","id":"reply-1","seq":3,"timestampMs":1700000002000,"message":{"type":"text","content":"Here is what I found."}}'
+                  ']}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("Here is what I found.", spoken)
+            self.assertNotIn("a private aside", spoken)
+            self.assertNotIn("ask the other agent", spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_only_visible_chat_text_is_read(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.agent-123",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","seq":1,"timestampMs":1,"content":"user typed this"},'
+                  '{"kind":"message","role":"assistant","seq":2,"timestampMs":2,"content":"reasoning that is not on screen"},'
+                  '{"kind":"message","role":"system","seq":3,"timestampMs":3,"content":"system turn"},'
+                  '{"kind":"message","role":"assistant","id":"tool-1","seq":4,"timestampMs":4,"content":"tool result payload"},'
+                  '{"kind":"event","seq":5,"timestampMs":5,"event":{"type":"status","text":"still working"}},'
+                  '{"kind":"send-message","seq":6,"timestampMs":6,"message":{"type":"widget","content":"a button"}},'
+                  '{"kind":"send-message","seq":7,"timestampMs":7,"message":{"type":"todo","content":"finish the list"}},'
+                  '{"kind":"send-message","seq":8,"timestampMs":8,"message":{"type":"tool","content":"ran a command"}},'
+                  '{"kind":"send-message","id":"hid","hidden":true,"seq":9,"timestampMs":9,"message":{"type":"text","content":"hidden bubble"}},'
+                  '{"kind":"send-message","id":"agent-outbound-4","toAgent":{"id":"other"},"seq":10,"timestampMs":10,"message":{"type":"text","content":"note to another agent"}},'
+                  '{"kind":"send-message","id":"shown","seq":11,"timestampMs":11,"message":{"type":"text","content":"See [the docs](https://example.com/secret)."}}'
+                  ']}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertEqual(len(lines), 1)
+            self.assertIn("See the docs.", spoken)
+            self.assertNotIn("example.com", spoken)
+            for hidden in (
+                "user typed", "reasoning", "system turn", "tool result", "still working",
+                "a button", "finish the list", "ran a command", "hidden bubble", "note to another agent",
+            ):
+                self.assertNotIn(hidden, spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_speech_matches_the_screen(self):
+        self.assertEqual(grok_store.render_speech("See [the docs](https://example.com/path)."), "See the docs.")
+        self.assertNotIn("example.com", grok_store.render_speech("[label](https://example.com/path)"))
+        self.assertEqual(grok_store.render_speech("**bold** and *italic* and `code`"), "bold and italic and code")
+        self.assertEqual(grok_store.render_speech("- one\n- two"), "one. two")
+        spoken = grok_store.render_speech("Before\n```python\nprint(1)\n```\nAfter")
+        self.assertIn("code block", spoken)
+        self.assertNotIn("print", spoken)
+        self.assertIn("Before", spoken)
+        self.assertIn("After", spoken)
+
+    def test_message_id_survives_rewrite_and_chat_switch(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            larry_key = "sand.client.slice.account.a.transcript.replicas.larry"
+            amy_key = "sand.client.slice.account.a.transcript.replicas.amy"
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u1","seq":1,"timestampMs":1000,"content":"hi"},'
+                  '{"kind":"send-message","id":"same-1","seq":2,"timestampMs":1100,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            _blob(store, amy_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u2","seq":1,"timestampMs":500,"content":"amy hi"},'
+                  '{"kind":"send-message","id":"amy-1","seq":2,"timestampMs":600,"message":{"type":"text","content":"Amy was quiet."}}'
+                  ']}}')
+            lines, _names, keylists, active = grok_store.reply_snapshot(store)
+            self.assertIn("Spoken once.", " ".join(lines))
+            self.assertNotIn("Amy was quiet.", " ".join(lines))
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            # Eight minutes later the same bubble is rewritten with a new time and seq.
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u1","seq":1,"timestampMs":1000,"content":"hi"},'
+                  '{"kind":"send-message","id":"same-1","seq":40,"timestampMs":999999,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, active2 = grok_store.reply_snapshot(store)
+            self.assertEqual(active, active2)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Switch to Amy, then back. Larry's id is still known.
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy","selected":true}]}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            fresh = grok_store.unseen_lines(seen, lines, keylists)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("Amy was quiet.", fresh[0])
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"same-1","seq":41,"timestampMs":1000001,"message":{"id":"same-1","type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # A new id with the same on-screen words is still the same reply.
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"brand-new","seq":42,"timestampMs":1000002,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+        finally:
+            shutil.rmtree(root)
+
+    def test_restart_with_existing_history_reads_nothing_until_a_new_reply(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            key = "sand.client.slice.account.a.transcript.replicas.agent-123"
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"note-a","toAgent":{"id":"cloud"},"seq":1,"timestampMs":1700000000000,"content":"to another agent"},'
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-2","seq":2,"timestampMs":1700000000500,"content":"outbound note"},'
+                  '{"kind":"send-message","id":"old-1","seq":3,"timestampMs":1700000001000,"message":{"type":"text","content":"older reply"}},'
+                  '{"kind":"send-message","id":"old-2","seq":4,"timestampMs":1700000002000,"message":{"type":"text","content":"newest already here"}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            spoken = " ".join(lines)
+            self.assertIn("older reply", spoken)
+            self.assertIn("newest already here", spoken)
+            self.assertNotIn("to another agent", spoken)
+            self.assertNotIn("outbound note", spoken)
+            # A fresh process baselines whatever is already saved.
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Restarting does the same with a new seen set. History is still quiet.
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            self.assertTrue(grok_store.launch_is_baseline(set(), ["Bot older reply", "Bot newest already here"], []))
+            self.assertFalse(grok_store.launch_is_baseline(seen, lines, lines))
+            # The slice is rewritten and a reply arrives after launch.
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-2","seq":1,"timestampMs":1700000000500,"content":"outbound note"},'
+                  '{"kind":"send-message","id":"old-1","seq":8,"timestampMs":1700000001000,"message":{"type":"text","content":"older reply"}},'
+                  '{"kind":"send-message","id":"old-2","seq":9,"timestampMs":1700000002000,"message":{"type":"text","content":"newest already here"}},'
+                  '{"kind":"send-message","id":"new-1","seq":10,"timestampMs":1700000003000,"message":{"type":"text","content":"arrived after launch"}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            fresh = grok_store.unseen_lines(seen, lines, keylists)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("arrived after launch", fresh[0])
+            self.assertNotIn("older reply", " ".join(fresh))
+            self.assertNotIn("newest already here", " ".join(fresh))
+            self.assertNotIn("outbound note", " ".join(lines))
+            self.assertIn("older reply", " ".join(lines))
+        finally:
+            shutil.rmtree(root)
+
+    def test_rewrite_does_not_reread_old_replies(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            key = "sand.client.slice.account.a.transcript.replicas.agent-123"
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"m1","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"first"}},'
+                  '{"kind":"send-message","id":"m2","seq":2,"timestampMs":1700000001000,"message":{"type":"text","content":"second"}}'
+                  ']}}')
+            lines, _names, keylists, active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Compact the slice: drop the first reply, renumber seq, add a new one.
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"m2","seq":9,"timestampMs":1700000001000,"message":{"type":"text","content":"second"}},'
+                  '{"kind":"send-message","id":"m3","seq":10,"timestampMs":1700000002000,"message":{"type":"text","content":"third"}}'
+                  ']}}')
+            lines, _names, keylists, active2 = grok_store.reply_snapshot(store)
+            self.assertEqual(active, active2)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [
+                line for line in lines if "third" in line
+            ])
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+        finally:
+            shutil.rmtree(root)
+
+    def _two_chats(self, root, larry_user_ms, amy_user_ms):
+        store = os.path.join(root, "sand-client-persistence")
+        _blob(store, "sand.client.slice.account.a.roster.last-roster",
+              '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy"}]}}')
+        larry = _blob(store, "sand.client.slice.account.a.transcript.replicas.larry",
+                      '{"schemaVersion":1,"value":{"entries":['
+                      '{"kind":"message","role":"user","id":"u-larry","seq":1,"timestampMs":%s,"content":"question for larry"},'
+                      '{"kind":"send-message","id":"r-larry","seq":2,"timestampMs":1700000009000,"message":{"type":"text","content":"larry reply"}},'
+                      '{"kind":"message","role":"assistant","id":"agent-outbound-larry","toAgent":{"id":"amy"},"seq":3,"timestampMs":1700000009500,"content":"larry side note"}'
+                      ']}}' % larry_user_ms)
+        amy = _blob(store, "sand.client.slice.account.a.transcript.replicas.amy",
+                    '{"schemaVersion":1,"value":{"entries":['
+                    '{"kind":"message","role":"user","id":"u-amy","seq":1,"timestampMs":%s,"content":"question for amy"},'
+                    '{"kind":"send-message","id":"r-amy","seq":2,"timestampMs":1700000008000,"message":{"type":"text","content":"amy reply"}}'
+                    ']}}' % amy_user_ms)
+        return store, larry, amy
+
+    def test_open_chat_ignores_other_bots(self):
+        root = tempfile.mkdtemp()
+        try:
+            store, larry_file, amy_file = self._two_chats(root, 1_700_000_000_000, 1_800_000_000_000)
+            # Amy's file is older on disk, but Amy is who Chip wrote to last.
+            os.utime(amy_file, (1_700_000_000, 1_700_000_000))
+            os.utime(larry_file, (1_700_000_500, 1_700_000_500))
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("amy reply", spoken)
+            self.assertNotIn("larry reply", spoken)
+            self.assertNotIn("larry side note", spoken)
+            # A saved selection beats both the latest user message and file time.
+            _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                  '{"schemaVersion":1,"value":{"selectedAgentId":"larry"}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+            self.assertNotIn("larry side note", spoken)
+            # With no selection slice, the window title names the open bot.
+            os.remove(os.path.join(store, grok_store.encode_base32("sand.client.slice.account.a.ui.selected-agent") + ".blob"))
+            lines, _names, _keys, _active = grok_store.reply_snapshot(store, window_titles=["Larry — Grok Bot"])
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+            # A roster row marked selected also names the open chat.
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_active_chat_is_the_newest_file(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            older = _blob(store, "sand.client.slice.account.a.transcript.replicas.old-bot",
+                          '{"schemaVersion":1,"value":{"entries":[{"kind":"send-message","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"old chat"}}]}}')
+            newer = _blob(store, "sand.client.slice.account.a.transcript.replicas.new-bot",
+                          '{"schemaVersion":1,"value":{"entries":[{"kind":"send-message","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"new chat"}}]}}')
+            os.utime(older, (1_700_000_000, 1_700_000_000))
+            os.utime(newer, (1_700_000_100, 1_700_000_100))
+            lines, _names = grok_store.reply_lines(store)
+            self.assertEqual(len(lines), 1)
+            self.assertIn("new chat", lines[0])
+        finally:
+            shutil.rmtree(root)
+
+    def test_chief_voice_regex_still_matches(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            os.makedirs(store)
+            with open(os.path.join(store, "settings.blob"), "w", encoding="utf-8") as handle:
+                handle.write('{"id":"12345678-1234-1234-1234-123456789abc","name":"Moya","voiceId":"eve","voiceSpeed":1.1}')
+            voice, speed = grok_store.chief_voice(store, "Moya")
+            self.assertEqual(voice, "eve")
+            self.assertAlmostEqual(speed, 1.1)
+            self.assertEqual(grok_store.chief_voice(None, "Moya"), ("carina", 1.0))
+        finally:
+            shutil.rmtree(root)
+
+    def test_flatpak_and_configured_folder(self):
+        home = tempfile.mkdtemp()
+        try:
+            flatpak = os.path.join(home, ".var", "app", "com.anysphere.sand", "config", "Grok Bot", "sand-client-persistence")
+            os.makedirs(flatpak)
+            with open(os.path.join(flatpak, "note.blob"), "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            found = grok_store.linux_store(os.path.join(home, ".config", "grokbot-voice"), home=home, config_home=os.path.join(home, ".config"), env={})
+            self.assertEqual(found, flatpak)
+            custom = os.path.join(home, "custom-chats")
+            os.makedirs(custom)
+            env = {"GROKBOT_CHAT_DIR": custom}
+            chosen = grok_store.linux_store(os.path.join(home, ".config", "grokbot-voice"), home=home, config_home=os.path.join(home, ".config"), env=env)
+            self.assertEqual(chosen, custom)
+            names = [os.path.normpath(path) for path in grok_store.candidate_dirs(home, os.path.join(home, ".config"))]
+            self.assertIn(os.path.normpath(os.path.join(home, ".config", "Grok Bot", "sand-client-persistence")), names)
+            self.assertIn(os.path.normpath(os.path.join(home, ".config", "grok-bot", "sand-client-persistence")), names)
+            self.assertIn(os.path.normpath(os.path.join(home, ".config", "Grokbot", "sand-client-persistence")), names)
+            self.assertTrue(any("/snap/" in path or path.endswith("sand-client-persistence") for path in names))
+        finally:
+            shutil.rmtree(home)
+
+    def test_snap_path_is_a_candidate(self):
+        home = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(home, "snap", "grok-bot", "current"))
+            names = grok_store.candidate_dirs(home, os.path.join(home, ".config"))
+            self.assertTrue(any(os.path.join("snap", "grok-bot", "current") in path for path in names))
+            self.assertTrue(any(os.path.join("snap", "grok-bot", "common") in path for path in names))
+        finally:
+            shutil.rmtree(home)
+
+    def test_piper_help_check_and_player_order(self):
+        root = tempfile.mkdtemp()
+        try:
+            binary = os.path.join(root, "piper")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\necho --output_file --length_scale\n")
+            os.chmod(binary, os.stat(binary).st_mode | stat.S_IEXEC)
+            self.assertTrue(platform_linux._is_tts_piper(binary))
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\necho gamepad mapper\n")
+            self.assertFalse(platform_linux._is_tts_piper(binary))
+        finally:
+            shutil.rmtree(root)
+        original = platform_linux._player_bin
+        real_which = platform_linux.shutil.which
+        try:
+            platform_linux._player_bin = None
+            platform_linux.shutil.which = lambda name: "/usr/bin/" + name if name == "pw-play" else None
+            self.assertEqual(platform_linux._player_command("out.wav"), ["/usr/bin/pw-play", "out.wav"])
+            platform_linux._player_bin = None
+            platform_linux.shutil.which = lambda name: "/usr/bin/" + name if name == "paplay" else None
+            self.assertEqual(platform_linux._player_command("out.wav")[0], "/usr/bin/paplay")
+        finally:
+            platform_linux._player_bin = original
+            platform_linux.shutil.which = real_which
+
+
+if __name__ == "__main__":
+    unittest.main()

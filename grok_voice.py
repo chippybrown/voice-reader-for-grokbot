@@ -1,214 +1,229 @@
-# Grokbot Voice (automatic) for the Grok Bot desktop app on Windows.
-# Shows a small always-on-top toolbar and speaks each new bot reply.
-# Keyboard shortcuts still work from any window:
+# Grokbot Voice for the Grok Bot desktop app.
+# A small always-on-top toolbar speaks each new bot reply.
+# Windows reads the Grok Bot window. Linux reads the app's saved chat files.
+# Keyboard shortcuts still work from any window on Windows, and on Linux Mint's
+# usual X11 session:
 #   Ctrl+Alt+S = stop reading   Ctrl+Alt+P = pause/resume   Ctrl+Alt+Q = turn off
-import os, time
+import json
+import os
+import sys
+import threading
+import time
 import tkinter as tk
-import keyboard
-import comtypes.client
-import uiautomation as auto
+import urllib.request
 
-SPEED = 0          # -10 (slow) to 10 (fast), 0 is normal
-SKIP_STARTS = ("Message", "You ", "Chip ", "Eldon ")  # not bot replies
-SAVED = os.path.join(os.environ.get("APPDATA", "."), "Grok Reader voice.txt")
-ASYNC, PURGE = 1, 2
+if sys.platform == "win32":
+    import platform_win as platform
+else:
+    import platform_linux as platform
 
-voice = comtypes.client.CreateObject("SAPI.SpVoice")
-voices = voice.GetVoices()
-voice.Rate = SPEED
+import bot_prefs
+import grok_store
+import piper_setup
+import single_instance
+import window_layout
+from audio_util import write_pcm_wav
+from version import APP_TITLE
 
-# ---- voice list: Windows voices + Piper natural voices ----
-import glob, wave, threading, winsound
-PIPER_DIR = os.path.join(os.environ.get("APPDATA", "."), "Grok Voice", "piper")
-WAV = os.path.join(os.environ.get("TEMP", "."), "grok_voice_say.wav")
-choices = []   # (label, kind, ref)
-for i in range(voices.Count):
-    label = voices.Item(i).GetDescription().replace("Microsoft ", "").split(" - ")[0]
-    choices.append((label, "sapi", i))
-piper_files = sorted(glob.glob(os.path.join(PIPER_DIR, "*.onnx")))
-piper_keys = [os.path.basename(p).split("-")[1] for p in piper_files]
-for f in piper_files:
-    key = os.path.basename(f).split("-")[1]
-    quality = os.path.basename(f)[:-5].split("-")[-1]
-    nm = {"jenny_dioco": "Jenny", "ljspeech": "LJ Speech"}.get(key, key.replace("_", " ").title())
-    if piper_keys.count(key) > 1 and quality != "medium":
-        nm += " " + quality.title()
-    choices.append((nm + " (natural)", "piper", f))
+# Claim the single-instance lock before hotkeys, settings, or the window.
+# A second start exits here, so it never speaks. The first window is raised.
+_window = {}
 
-# ---- Grok voice: the chief of staff bot's own voice from the Grok Bot app ----
-GV_DIR = os.path.join(os.environ.get("APPDATA", "."), "Grok Voice")
-CHIEF_FILE = os.path.join(GV_DIR, "chief of staff.txt")   # bot whose voice reads everything
-KEY_FILE = os.path.join(GV_DIR, "xai key.bin")             # xAI API key, encrypted for this Windows user
+def _another_launch():
+    window = _window.get("root")
+    if window is None:
+        return
+    def raise_window():
+        try:
+            window.lift()
+            window.attributes("-topmost", True)
+        except Exception:
+            pass
+    try:
+        window.after(0, raise_window)
+    except Exception:
+        pass
+
+_instance = single_instance.InstanceLock(platform.config_dir())
+if os.environ.get("GROKBOT_VOICE_SELFTEST") != "1" and not _instance.claim(_another_launch):
+    sys.exit(0)
+
+SAVED = platform.saved_voice_path()
+TUNE_FILE = platform.tune_path()
+WAV = platform.wav_path("say")
+
+choices = platform.voice_choices()   # (label, kind, ref)
+
 def chief_name():
     try:
-        return open(CHIEF_FILE).read().strip() or "Moya"
+        return open(platform.chief_path(), encoding="utf-8").read().strip() or "Moya"
     except Exception:
         return "Moya"
-def chief_voice(name):
-    """Read the bot's saved voice (e.g. carina) from the Grok Bot app's local data."""
-    import re as _re
-    d = os.path.join(os.environ.get("APPDATA", "."), "Grok Bot", "sand-client-persistence")
-    pat = _re.compile(r'\{"id":"[0-9a-f-]{36}","name":"%s"' % _re.escape(name))
-    vpat = _re.compile(r'"voiceId":"([a-z]+)","voiceSpeed":([\d.]+)')
-    for f in glob.glob(os.path.join(d, "*.blob")):
-        try:
-            t = open("\\\\?\\" + os.path.abspath(f), encoding="utf-8", errors="ignore").read()
-        except Exception:
-            continue
-        for m in pat.finditer(t):
-            v = vpat.search(t, m.end(), m.end() + 8000)
-            if v:
-                return v.group(1), float(v.group(2))
-    return ("carina", 1.0) if name == "Moya" else (None, 1.0)
-
-import ctypes as _ct
-from ctypes import wintypes as _wt
-class _BLOB(_ct.Structure):
-    _fields_ = [("cbData", _wt.DWORD), ("pbData", _ct.POINTER(_ct.c_char))]
-def _dpapi(data, protect):
-    src = _BLOB(len(data), _ct.cast(_ct.create_string_buffer(data, len(data)), _ct.POINTER(_ct.c_char)))
-    out = _BLOB()
-    fn = _ct.windll.crypt32.CryptProtectData if protect else _ct.windll.crypt32.CryptUnprotectData
-    if not fn(_ct.byref(src), None, None, None, None, 0, _ct.byref(out)):
-        raise OSError("Windows could not protect the key")
-    res = _ct.string_at(out.pbData, out.cbData)
-    _ct.windll.kernel32.LocalFree(out.pbData)
-    return res
-def load_key():
-    try:
-        return _dpapi(open(KEY_FILE, "rb").read(), False).decode()
-    except Exception:
-        return ""
-def save_key(k):
-    os.makedirs(GV_DIR, exist_ok=True)
-    open(KEY_FILE, "wb").write(_dpapi(k.strip().encode(), True))
 
 _chief = chief_name()
-_cv, _cspeed = chief_voice(_chief)
+_cv, _cspeed = grok_store.chief_voice(platform.persistence_dir(), _chief)
 if _cv:
     choices.insert(0, ("%s's voice (Grok)" % _chief, "grok", _cv))
+if not choices:
+    choices.append(("English (espeak-ng)", "espeak", "en"))
 
 def grok_audio(text, voice_id, speed):
     """Ask xAI's speech service for 24 kHz 16-bit PCM in the given voice."""
-    import urllib.request
     body = json.dumps({"text": text, "voice_id": voice_id, "language": "auto",
                        "speed": max(0.7, min(1.5, speed)),
                        "output_format": {"codec": "pcm", "sample_rate": 24000}}).encode()
     req = urllib.request.Request("https://api.x.ai/v1/tts", data=body, method="POST", headers={
-        "Authorization": "Bearer " + load_key(), "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.read()
+        "Authorization": "Bearer " + platform.load_key(), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as response:
+        return response.read()
 
-piper_cache = {}
 speak_state = {"kind": "sapi", "ref": 0, "token": 0, "busy_until": 0.0, "making": False}
 
-import json
-from xml.sax.saxutils import escape
-TUNE_FILE = os.path.join(os.environ.get("APPDATA", "."), "Grok Voice", "voice settings.json")
 try:
-    tune_all = json.load(open(TUNE_FILE))
+    tune_all = json.load(open(TUNE_FILE, encoding="utf-8"))
 except Exception:
     tune_all = {}
-def tune():   # current voice's {"speed": 0.5..2.0, "pitch": -10..10}
-    t = tune_all.setdefault(speak_state.get("label", ""), {})
-    t.setdefault("speed", 1.0); t.setdefault("pitch", 0)
-    return t
+
+def voice_tune(label):
+    """Speed and pitch saved for one voice label."""
+    saved = tune_all.setdefault(label or "", {})
+    saved.setdefault("speed", 1.0)
+    saved.setdefault("pitch", 0)
+    return saved
+
+def tune():   # voice in use, or this bot's own speed and pitch when set
+    base = voice_tune(speak_state.get("label", ""))
+    if "bot_speed" not in speak_state and "bot_pitch" not in speak_state:
+        return base
+    return {
+        "speed": speak_state.get("bot_speed", base["speed"]),
+        "pitch": speak_state.get("bot_pitch", base["pitch"]),
+    }
+
 def save_tune():
     os.makedirs(os.path.dirname(TUNE_FILE), exist_ok=True)
-    json.dump(tune_all, open(TUNE_FILE, "w"), indent=1)
+    json.dump(tune_all, open(TUNE_FILE, "w", encoding="utf-8"), indent=1)
 
 def use_choice(i):
     label, kind, ref = choices[i]
     speak_state["kind"], speak_state["ref"], speak_state["label"] = kind, ref, label
     if kind == "sapi":
-        voice.Voice = voices.Item(ref)
+        platform.select_sapi(ref)
 
 saved_label = ""
 try:
-    saved_label = open(SAVED).read().strip()
+    saved_label = open(SAVED, encoding="utf-8").read().strip()
 except Exception:
     pass
-saved = next((i for i, ch in enumerate(choices) if ch[0] == saved_label), 0)
+saved = piper_setup.preferred_index([ch[0] for ch in choices], saved_label)
 use_choice(saved)
+
+BOT_FILE = os.path.join(platform.config_dir(), "bot settings.json")
+
+def load_bot_prefs():
+    try:
+        return bot_prefs.normalize(json.load(open(BOT_FILE, encoding="utf-8")))
+    except Exception:
+        return bot_prefs.fresh()
+
+bot_state = load_bot_prefs()
+
+def save_bot_prefs():
+    os.makedirs(os.path.dirname(BOT_FILE), exist_ok=True)
+    json.dump(bot_state, open(BOT_FILE, "w", encoding="utf-8"), indent=1)
+
+def saved_voice_label():
+    try:
+        return open(SAVED, encoding="utf-8").read().strip()
+    except Exception:
+        return choices[saved][0] if choices else ""
+
+def apply_bot_voice(bot):
+    """The open chat's bot picks the voice. No pick uses the default voice."""
+    voice, speed, pitch = bot_prefs.voice_choice(bot_state, bot)
+    label = voice or saved_voice_label()
+    idx = next((i for i, ch in enumerate(choices) if ch[0] == label), None)
+    if idx is None:
+        idx = saved
+        speed = pitch = None
+    use_choice(idx)
+    if speed is None:
+        speak_state.pop("bot_speed", None)
+    else:
+        speak_state["bot_speed"] = float(speed)
+    if pitch is None:
+        speak_state.pop("bot_pitch", None)
+    else:
+        speak_state["bot_pitch"] = int(pitch)
+
+def log(msg):
+    try:
+        path = platform.log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(time.strftime("%H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
+
+def fallback_local():
+    """Jenny, then any Piper voice, then espeak-ng on Linux."""
+    piper = next((c for c in choices if c[1] == "piper" and c[0].startswith("Jenny")), None)
+    if piper is None:
+        piper = next((c for c in choices if c[1] == "piper"), None)
+    if piper:
+        return piper[1], piper[2]
+    espeak = next((c for c in choices if c[1] == "espeak"), None)
+    if espeak:
+        return espeak[1], espeak[2]
+    return None, None
 
 def stop_all():
     speak_state["token"] += 1
     speak_state["busy_until"] = 0.0
     speak_state["held"] = False
-    if speak_state.pop("sapi_paused", False):
-        voice.Resume()
-    voice.Speak("", ASYNC | PURGE)
-    winsound.PlaySound(None, 0)
+    platform.stop_all_audio()
 
 def piper_job(text, token, wait):
     try:
+        kind = speak_state["kind"]
         ref = speak_state["ref"]
-        if speak_state["kind"] == "grok":
+        if kind == "grok":
             try:
-                if not load_key():
+                if not platform.load_key():
                     raise RuntimeError("no xAI key set")
                 pcm = grok_audio(text, ref, tune()["speed"])
                 if token != speak_state["token"]:
                     return
-                params = wave._wave_params(1, 2, 24000, len(pcm) // 2, "NONE", "not compressed")
-                with wave.open(WAV, "wb") as w:
-                    w.setparams(params); w.writeframes(pcm)
-                secs = len(pcm) / 48000.0
-                speak_state["audio"] = (params, pcm)
-                speak_state["offset"] = 0.0
+                write_pcm_wav(WAV, pcm)
+                platform.audio.arm(WAV)
                 if speak_state.get("paused"):
                     return
-                speak_state["play_start"] = time.time()
-                speak_state["busy_until"] = time.time() + secs
-                winsound.PlaySound(WAV, winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC))
+                platform.audio.play(wait)
                 return
-            except Exception as e:
-                log("Grok voice problem, using a local voice: %r" % (e,))
-                ref = next((c[2] for c in choices if c[1] == "piper" and c[0].startswith("Jenny")),
-                           next((c[2] for c in choices if c[1] == "piper"), None))
-                if ref is None:
+            except Exception as exc:
+                log("Grok voice problem, using a local voice: %r" % (exc,))
+                kind, ref = fallback_local()
+                if kind is None:
                     return
-        if ref not in piper_cache:
-            from piper import PiperVoice
-            piper_cache[ref] = PiperVoice.load(ref)
-        from piper import SynthesisConfig
-        t = tune()
-        shift = 2 ** ((t["pitch"] * 0.6) / 12.0)          # pitch shift by playing faster/slower
-        cfg = SynthesisConfig(length_scale=shift / max(0.3, t["speed"]))
-        with wave.open(WAV, "wb") as w:
-            piper_cache[ref].synthesize_wav(text, w, syn_config=cfg)
-        with wave.open(WAV, "rb") as w:
-            params, frames = w.getparams(), w.readframes(w.getnframes())
-        rate = int(params.framerate * shift)
-        with wave.open(WAV, "wb") as w:
-            w.setparams(params._replace(framerate=rate))
-            w.writeframes(frames)
-        secs = params.nframes / float(rate)
         if token != speak_state["token"]:
             return
-        speak_state["audio"] = (params._replace(framerate=rate), frames)
-        speak_state["offset"] = 0.0
+        settings = tune()
+        platform.synthesize(kind, ref, text, settings["speed"], settings["pitch"], WAV)
+        if token != speak_state["token"]:
+            return
+        platform.audio.arm(WAV)
         if speak_state.get("paused"):
             return   # paused while the audio was being made: wait for Resume
-        speak_state["play_start"] = time.time()
-        speak_state["busy_until"] = time.time() + secs
-        winsound.PlaySound(WAV, winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC))
-    except Exception as e:
-        print("Piper problem:", e)
-        log("Piper problem: %r" % (e,))
+        platform.audio.play(wait)
+    except Exception as exc:
+        print("Voice problem:", exc)
+        log("Voice problem: %r" % (exc,))
     finally:
         if token == speak_state["token"]:
             speak_state["making"] = False
 
-LOG = os.path.join(os.environ.get("TEMP", "."), "grokbot_voice_log.txt")
-def log(msg):
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(time.strftime("%H:%M:%S ") + msg + "\n")
-    except Exception:
-        pass
-
-def say(text, wait=False):
+def say(text, wait=False, bot=None):
+    apply_bot_voice(bot)
     if text:
         log("speak [%s] %s" % (speak_state.get("label", "?"), text[:60].replace("\n", " ")))
     stop_all()
@@ -217,10 +232,8 @@ def say(text, wait=False):
     speak_state["paused"] = False   # Back/Next/new reply while paused: play it and leave pause
     flags["pause"] = False
     if speak_state["kind"] == "sapi":
-        t = tune()
-        voice.Rate = max(-10, min(10, round((t["speed"] - 1.0) * 10)))
-        xml = '<pitch absmiddle="%d">%s</pitch>' % (t["pitch"], escape(text))
-        voice.Speak(xml, (0 if wait else ASYNC | PURGE) | 8)
+        settings = tune()
+        platform.speak_sapi(text, settings["speed"], settings["pitch"], wait)
         return
     speak_state["making"] = True
     tok = speak_state["token"]
@@ -229,19 +242,13 @@ def say(text, wait=False):
     else:
         threading.Thread(target=piper_job, args=(text, tok, False), daemon=True).start()
 
-WAV2 = os.path.join(os.environ.get("TEMP", "."), "grok_voice_resume.wav")
 def pause_audio():
     """Pause mid-reply and remember the spot."""
     speak_state["paused"] = True
     if speak_state["kind"] == "sapi":
-        if voice.Status.RunningState == 2:
-            voice.Pause()
-            speak_state["sapi_paused"] = True
+        platform.pause_sapi()
         return
-    if time.time() < speak_state["busy_until"] and speak_state.get("audio"):
-        speak_state["offset"] += time.time() - speak_state.get("play_start", time.time())
-        speak_state["busy_until"] = 0.0
-        winsound.PlaySound(None, 0)
+    if platform.audio.pause():
         speak_state["held"] = True
     elif speak_state["making"]:
         speak_state["held"] = True   # audio still being made; it will wait
@@ -250,58 +257,22 @@ def resume_audio():
     """Carry on from the remembered spot."""
     speak_state["paused"] = False
     if speak_state["kind"] == "sapi":
-        if speak_state.pop("sapi_paused", False):
-            voice.Resume()
+        platform.resume_sapi()
         return
     if not speak_state.pop("held", False):
         return
     if speak_state["making"]:
         return   # job will play it when done
-    params, frames = speak_state["audio"]
-    width = params.sampwidth * params.nchannels
-    start = int(speak_state["offset"] * params.framerate) * width
-    rest = frames[start:]
-    if not rest:
-        return
-    with wave.open(WAV2, "wb") as w:
-        w.setparams(params)
-        w.writeframes(rest)
-    secs = len(rest) / float(width * params.framerate)
-    speak_state["play_start"] = time.time()
-    speak_state["busy_until"] = time.time() + secs
-    winsound.PlaySound(WAV2, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    platform.audio.resume()
 
 def is_speaking():
-    if speak_state.get("held") or speak_state.get("sapi_paused"):
+    if speak_state.get("held") or platform.sapi_is_paused():
         return True   # paused mid-reply still counts as this reply
     if speak_state["kind"] == "sapi":
-        return voice.Status.RunningState == 2
-    return speak_state["making"] or time.time() < speak_state["busy_until"]
+        return platform.sapi_speaking()
+    return speak_state["making"] or platform.audio.is_active()
 
 flags = {"stop": False, "back": False, "skip": False, "pause": False, "quit": False, "play": False}
-keyboard.add_hotkey("ctrl+alt+s", lambda: flags.update(stop=True))
-keyboard.add_hotkey("ctrl+alt+p", lambda: flags.update(pause=not flags["pause"]))
-keyboard.add_hotkey("ctrl+alt+q", lambda: flags.update(quit=True))
-
-def bot_replies():
-    win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
-    if not win.Exists(0, 0):
-        return []
-    found, inside = [], False
-    for ctrl, depth in auto.WalkControl(win, maxDepth=60):
-        if ctrl.ControlTypeName != "GroupControl":
-            continue
-        name = (ctrl.Name or "").strip()
-        if name == "Conversation transcript":
-            inside = True
-            continue
-        if name in ("Conversation details", "Computer preview"):
-            inside = False
-        if inside and " " in name and len(name) > 15 and not name.startswith(SKIP_STARTS):
-            if not announce(name).strip():
-                continue   # just a timestamp like "Cameron 6:50:11 AM", nothing to read
-            found.append(name)
-    return found
 
 # Bot names, longest first, so "Vision Design 3.0" wins over "Vision".
 BOT_NAMES = sorted(["Moya", "Research Bot", "Grass Hopper", "Time Card", "Design Bot", "Finance Bot",
@@ -310,179 +281,541 @@ BOT_NAMES = sorted(["Moya", "Research Bot", "Grass Hopper", "Time Card", "Design
     "Estimating Bot", "Doc Bot", "Vision Bot", "Appian Bot Vision"], key=len, reverse=True)
 import re
 TIME_RE = re.compile(r"\b(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+)?(?:\w{3,9}\s+\d{1,2},?\s+)?\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?\b")
+
+def remember_names(names):
+    changed = False
+    fresh_names = []
+    for name in names:
+        label = " ".join(str(name or "").split())
+        if not label:
+            continue
+        fresh_names.append(label)
+        if label not in BOT_NAMES:
+            BOT_NAMES.append(label)
+            changed = True
+    if changed:
+        BOT_NAMES.sort(key=len, reverse=True)
+    before = set(bot_state["bots"])
+    bot_prefs.note_bots(bot_state, fresh_names)
+    if set(bot_state["bots"]) != before:
+        save_bot_prefs()
+
+def bot_of(reply):
+    """The bot named at the start of a stored reply line."""
+    return next((name for name in BOT_NAMES if reply.startswith(name + " ")), "")
+
 def announce(reply):
     """'Cameron 6:50 AM Hello there' -> 'Hello there' (no bot name, no time)"""
-    text = next((reply[len(n) + 1:] for n in BOT_NAMES if reply.startswith(n + " ")), None)
+    text = next((reply[len(name) + 1:] for name in BOT_NAMES if reply.startswith(name + " ")), None)
     if text is None:
         text = reply.partition(" ")[2]
     text = text.strip()
-    m = TIME_RE.match(text)            # time at the start
-    if m:
-        text = text[m.end():].strip()
-    m = re.search(TIME_RE.pattern + r"\s*$", text)   # time at the end
-    if m:
-        text = text[:m.start()].strip()
-    return text
+    match = TIME_RE.match(text)            # time at the start
+    if match:
+        text = text[match.end():].strip()
+    text = re.sub(r"^#\d+\s+", "", text)   # Linux chat files mark each line with #seq
+    match = re.search(TIME_RE.pattern + r"\s*$", text)   # time at the end
+    if match:
+        text = text[:match.start()].strip()
+    return grok_store.render_speech(text)
+
+_logged_store = False
+def chat_snapshot():
+    """Visible replies, stable keys, and the Linux transcript path (None on Windows)."""
+    global _logged_store
+    if not _logged_store:
+        _logged_store = True
+        log("chat folder: %s" % (platform.persistence_dir() or "(not found)"))
+    lines, names, keylists, active = platform.read_snapshot()
+    remember_names(names)
+    kept_lines = []
+    kept_keys = []
+    for line, keys in zip(lines, keylists):
+        if announce(line).strip():
+            kept_lines.append(line)
+            kept_keys.append(tuple(keys))
+    return kept_lines, kept_keys, active
+
+def bot_replies():
+    lines, _keys, _active = chat_snapshot()
+    return lines
+
+def absorb_current():
+    """Mark whatever is in the chat now as already read. Returns those lines."""
+    lines, keys, active = chat_snapshot()
+    for keyset in keys:
+        state["seen"].update(keyset)
+    if active is not None:
+        state["file_key"] = active
+    state["prev_cur"] = list(lines)
+    return lines
+
+platform.install_hotkeys(flags)
 
 # ---------- toolbar (rounded, dark, draggable) ----------
-import ctypes
-try:  # hide the black console window if one opened
-    hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-    if hwnd:
-        ctypes.windll.user32.ShowWindow(hwnd, 0)
-except Exception:
-    pass
+platform.hide_console()
 
 BG, PANEL, FG, DIM, ACCENT, RED, KEY = "#1f2430", "#2a3040", "#e8ecf4", "#8a93a6", "#4cc38a", "#ff6b6b", "#ff00fe"
-W, H = 300, 74
+
 root = tk.Tk()
-root.title("Grokbot Voice")
-try:
-    import sys as _sys
-    root.iconbitmap(os.path.join(getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "grokbot_voice.ico"))
-except Exception:
-    pass
+_window["root"] = root
+root.title(APP_TITLE)
+platform.apply_icon(root)
 root.overrideredirect(True)
 root.attributes("-topmost", True)
-root.attributes("-transparentcolor", KEY)
-root.configure(bg=KEY)
+# Windows punches the magenta key color out so the rounded corners are transparent.
+# Linux Tk has no -transparentcolor. Use the bar color instead of leaving magenta corners.
+try:
+    root.attributes("-transparentcolor", KEY)
+    _bar_bg = KEY
+except tk.TclError:
+    _bar_bg = BG
+root.configure(bg=_bar_bg)
 sw = root.winfo_screenwidth()
 sh = root.winfo_screenheight()
-root.geometry(f"{W}x{H}+{int(sw - W - sw * 0.10)}+{int(sh - H - sh * 0.05)}")
 
-c = tk.Canvas(root, width=W, height=H, bg=KEY, highlightthickness=0)
-c.pack()
-def rounded(x1, y1, x2, y2, r, **kw):
-    pts = [x1+r,y1, x2-r,y1, x2,y1, x2,y1+r, x2,y2-r, x2,y2, x2-r,y2, x1+r,y2, x1,y2, x1,y2-r, x1,y1+r, x1,y1]
-    return c.create_polygon(pts, smooth=True, **kw)
-rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
+def window_file():
+    return os.path.join(platform.config_dir(), "window.json")
+
+def saved_window():
+    try:
+        data = json.load(open(window_file(), encoding="utf-8"))
+        layout = window_layout.normalize_layout(data.get("layout"))
+        w, h = window_layout.clamp_size(data["w"], data["h"], layout)
+        x, y = window_layout.clamp_origin(data["x"], data["y"], w, h, sw, sh, layout)
+        return w, h, x, y, layout
+    except Exception:
+        w, h = window_layout.DEFAULT_W, window_layout.DEFAULT_H
+        return w, h, int(sw - w - sw * 0.10), int(sh - h - sh * 0.05), "horizontal"
+
+window_state = {"layout": "horizontal"}
+W, H, OX, OY, window_state["layout"] = saved_window()
+root.geometry("%dx%d+%d+%d" % (W, H, OX, OY))
+
+c = tk.Canvas(root, width=W, height=H, bg=_bar_bg, highlightthickness=0)
+c.pack(fill="both", expand=True)
+def rounded_points(x1, y1, x2, y2, r):
+    return [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y2-r, x2, y2, x2-r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y1+r, x1, y1]
+shell = c.create_polygon(rounded_points(1, 1, W-1, H-1, 22), smooth=True, fill=BG, outline="#3a4256")
 
 # title + status
-c.create_text(16, 16, text="🔊  Grokbot Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
-dot = c.create_oval(138, 11, 148, 21, fill=ACCENT, outline="")
-stxt = c.create_text(152, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
+title_id = c.create_text(16, 16, text="🔊  " + APP_TITLE, anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
+dot = c.create_oval(248, 11, 258, 21, fill=ACCENT, outline="")
+stxt = c.create_text(264, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
+hold_status = {"text": ""}
 LABELS = {"Stopped": "Not monitoring", "Paused": "Reading paused"}
 btn = {}   # name -> (circle, glyph)
 def base_fill(name):
-    v = status.get()
-    if name == "stop" and v == "Stopped":
+    value = status.get()
+    if name == "stop" and value == "Stopped":
         return RED
-    if name == "pause" and v == "Paused":
+    if name == "pause" and value == "Paused":
         return "#f5b942"
     return PANEL
 def show_status(*_):
-    v = status.get()
-    c.itemconfig(stxt, text=LABELS.get(v, v))
-    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942", "Stopped": RED}.get(v, DIM))
-    for name, (b, t) in btn.items():
-        c.itemconfig(b, fill=base_fill(name))
+    value = status.get()
+    c.itemconfig(stxt, text=LABELS.get(value, value), fill=DIM)
+    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942", "Stopped": RED}.get(value, DIM))
+    for name, (circle, glyph) in btn.items():
+        c.itemconfig(circle, fill=base_fill(name))
     if "pause" in btn:
-        c.itemconfig(btn["pause"][1], fill="#1f2430" if v == "Paused" else FG)
+        c.itemconfig(btn["pause"][1], fill="#1f2430" if value == "Paused" else FG)
     if "play" in btn:   # green only while monitoring
-        c.itemconfig(btn["play"][1], fill=ACCENT if v in ("Watching", "Reading") else DIM)
+        c.itemconfig(btn["play"][1], fill=ACCENT if value in ("Watching", "Reading") else DIM)
 status.trace_add("write", show_status)
 
-# drag anywhere on the background
+# drag the background to move; drag an edge or corner to resize
+EDGE = 8
 drag = {}
-def press(e): drag.update(x=e.x, y=e.y)
-def move(e): root.geometry(f"+{root.winfo_x() + e.x - drag['x']}+{root.winfo_y() + e.y - drag['y']}")
-c.bind("<Button-1>", press); c.bind("<B1-Motion>", move)
+resize = {}
+_CURSORS = {
+    "n": "sb_v_double_arrow", "s": "sb_v_double_arrow",
+    "e": "sb_h_double_arrow", "w": "sb_h_double_arrow",
+    "nw": "top_left_corner", "se": "bottom_right_corner",
+    "ne": "top_right_corner", "sw": "bottom_left_corner",
+}
+def edge_at(x, y):
+    width = max(c.winfo_width(), 1)
+    height = max(c.winfo_height(), 1)
+    left, right = x <= EDGE, x >= width - EDGE
+    top, bottom = y <= EDGE, y >= height - EDGE
+    if top and left:
+        return "nw"
+    if top and right:
+        return "ne"
+    if bottom and left:
+        return "sw"
+    if bottom and right:
+        return "se"
+    if top:
+        return "n"
+    if bottom:
+        return "s"
+    if left:
+        return "w"
+    if right:
+        return "e"
+    return ""
+def save_window():
+    try:
+        os.makedirs(platform.config_dir(), exist_ok=True)
+        json.dump({"w": root.winfo_width(), "h": root.winfo_height(), "x": root.winfo_x(), "y": root.winfo_y(),
+                   "layout": window_state["layout"]},
+                  open(window_file(), "w", encoding="utf-8"))
+    except Exception:
+        pass
+def apply_box(x, y, width, height):
+    width, height = window_layout.clamp_size(width, height, window_state["layout"])
+    if "w" in resize.get("edge", ""):
+        x = resize["gx"] + resize["w"] - width
+    if "n" in resize.get("edge", ""):
+        y = resize["gy"] + resize["h"] - height
+    root.geometry("%dx%d+%d+%d" % (width, height, x, y))
+def press(e):
+    kind = edge_at(e.x, e.y)
+    if kind:
+        resize.update(edge=kind, x=e.x_root, y=e.y_root, gx=root.winfo_x(), gy=root.winfo_y(),
+                      w=root.winfo_width(), h=root.winfo_height())
+        drag.clear()
+        return
+    resize.clear()
+    if c.find_withtag("button"):
+        if c.find_overlapping(e.x, e.y, e.x, e.y) and set(c.find_overlapping(e.x, e.y, e.x, e.y)) & set(c.find_withtag("button")):
+            return
+    drag.update(x=e.x, y=e.y)
+def move(e):
+    if resize:
+        dx = e.x_root - resize["x"]
+        dy = e.y_root - resize["y"]
+        width, height = resize["w"], resize["h"]
+        origin_x, origin_y = resize["gx"], resize["gy"]
+        if "e" in resize["edge"]:
+            width = resize["w"] + dx
+        if "s" in resize["edge"]:
+            height = resize["h"] + dy
+        if "w" in resize["edge"]:
+            width = resize["w"] - dx
+        if "n" in resize["edge"]:
+            height = resize["h"] - dy
+        apply_box(origin_x, origin_y, width, height)
+        return
+    if drag:
+        root.geometry("+%d+%d" % (root.winfo_x() + e.x - drag["x"], root.winfo_y() + e.y - drag["y"]))
+def hover_edge(e):
+    if resize or drag:
+        return
+    root.configure(cursor=_CURSORS.get(edge_at(e.x, e.y), ""))
+def release(_e):
+    resize.clear()
+    drag.clear()
+    root.configure(cursor="")
+    save_window()
+c.bind("<Button-1>", press)
+c.bind("<B1-Motion>", move)
+c.bind("<Motion>", hover_edge)
+c.bind("<ButtonRelease-1>", release)
 
 # round icon buttons
+tip_box = {"win": None}
+def hide_tip():
+    win = tip_box.get("win")
+    if win is not None:
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        tip_box["win"] = None
+def show_tip(event, text):
+    hide_tip()
+    tip = tk.Toplevel(root)
+    tip.overrideredirect(True)
+    tip.attributes("-topmost", True)
+    tip.configure(bg="#11151c", highlightthickness=1, highlightbackground="#3a4256")
+    tk.Label(tip, text=text, bg="#11151c", fg=FG, font=("Segoe UI", 9), padx=8, pady=4).pack()
+    tip.update_idletasks()
+    x = event.x_root + 12
+    y = event.y_root - tip.winfo_height() - 10
+    tip.geometry("+%d+%d" % (x, y))
+    tip_box["win"] = tip
 def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12, name=None):
-    b = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="")
-    t = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size))
+    circle = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="", tags=("button",))
+    label = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size), tags=("button",))
     if name:
-        btn[name] = (b, t)
-    for item in (b, t):
-        c.tag_bind(item, "<Enter>", lambda e: (c.itemconfig(b, fill="#3a4256"), c.itemconfig(stxt, text=tip)))
-        c.tag_bind(item, "<Leave>", lambda e: show_status())
-        c.tag_bind(item, "<Button-1>", lambda e: action())
-icon_button(70,  "\u23EE", "Back", lambda: flags.update(back=True))
-icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True), name="stop")
-icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True), name="pause")
-icon_button(190, "\u25B6", "Play / Resume", lambda: flags.update(pause=False, play=True), ACCENT, name="play")
+        btn[name] = (circle, label)
+    def enter(e, circle=circle, tip=tip):
+        c.itemconfig(circle, fill="#3a4256")
+        show_tip(e, tip)
+    def leave(e, circle=circle):
+        hide_tip()
+        show_status()
+    for item in (circle, label):
+        def click(e, action=action):
+            hide_tip()
+            if edge_at(e.x, e.y):
+                return
+            action()
+        c.tag_bind(item, "<Enter>", enter)
+        c.tag_bind(item, "<Leave>", leave)
+        c.tag_bind(item, "<Button-1>", click)
+icon_button(120, "\u23EE", bot_prefs.TOOLBAR_TIPS["back"], lambda: flags.update(back=True), name="back")
+icon_button(165, "\u25A0", bot_prefs.TOOLBAR_TIPS["stop"], lambda: flags.update(stop=True), name="stop")
+icon_button(210, "\u275A\u275A", bot_prefs.TOOLBAR_TIPS["pause"], lambda: flags.update(pause=True), name="pause")
+icon_button(255, "\u25B6", bot_prefs.TOOLBAR_TIPS["play"], lambda: flags.update(pause=False, play=True), ACCENT, name="play")
 show_status()
-icon_button(230, "\u23ED", "Next", lambda: flags.update(skip=True))
-icon_button(W-50, "\u2699", "Settings", lambda: open_tuner(), y=17, r=11, size=10)
-icon_button(W-22, "\u23FB", "Turn off", lambda: flags.update(quit=True), RED, y=17, r=11, size=10)
+icon_button(300, "\u23ED", bot_prefs.TOOLBAR_TIPS["next"], lambda: flags.update(skip=True), name="next")
+icon_button(W-50, "\u2699", bot_prefs.TOOLBAR_TIPS["gear"], lambda: open_tuner(), y=17, r=11, size=10, name="gear")
+icon_button(W-22, "\u23FB", bot_prefs.TOOLBAR_TIPS["power"], lambda: flags.update(quit=True), RED, y=17, r=11, size=10, name="power")
+
+def relayout(width, height):
+    width, height = window_layout.clamp_size(width, height, window_state["layout"])
+    c.configure(width=width, height=height)
+    c.coords(shell, *rounded_points(1, 1, max(2, width - 1), max(2, height - 1), min(22, width // 4, height // 4)))
+    plan = window_layout.arrange(width, height, window_state["layout"])
+    c.coords(title_id, *plan["title"])
+    sx, sy = plan["status"]
+    c.coords(dot, sx, sy - 5, sx + 10, sy + 5)
+    c.coords(stxt, sx + 14, sy)
+    for name, x, y, radius in plan["buttons"]:
+        circle, glyph = btn[name]
+        c.coords(circle, x - radius, y - radius, x + radius, y + radius)
+        c.coords(glyph, x, y)
+def on_configure(event):
+    if event.widget is not root:
+        return
+    relayout(event.width, event.height)
+root.bind("<Configure>", on_configure)
+relayout(W, H)
 
 tuner = {"win": None}
 def open_tuner():
     if tuner["win"] is not None:
-        tuner["win"].destroy(); tuner["win"] = None
+        tuner["win"].destroy()
+        tuner["win"] = None
         return
-    t = tune()
+    default_label = saved_voice_label() or (choices[saved][0] if choices else "")
+    settings = voice_tune(default_label)
     win = tk.Toplevel(root)
     win.overrideredirect(True)
     win.attributes("-topmost", True)
     win.configure(bg=BG, highlightthickness=1, highlightbackground="#3a4256")
-    tk.Label(win, text="\u2699  Settings", bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
-    tk.Label(win, text="Voice", bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
-    vb = tk.Button(win, text="\U0001F3A4 " + speak_state["label"] + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
+    tk.Label(win, text=APP_TITLE, bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
+    tk.Label(win, text="Toolbar", bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=3, column=0, padx=(10, 0), sticky="w")
+    layout_row = tk.Frame(win, bg=BG)
+    layout_row.grid(row=3, column=1, sticky="w", padx=(0, 10))
+    layout_var = tk.StringVar(value=window_state["layout"])
+    def choose_layout():
+        window_state["layout"] = window_layout.normalize_layout(layout_var.get())
+        width, height = window_layout.clamp_size(root.winfo_width(), root.winfo_height(), window_state["layout"])
+        root.geometry("%dx%d+%d+%d" % (width, height, root.winfo_x(), root.winfo_y()))
+        relayout(width, height)
+        save_window()
+    for value, caption in (("horizontal", "Horizontal"), ("vertical", "Vertical")):
+        tk.Radiobutton(layout_row, text=caption, variable=layout_var, value=value, command=choose_layout,
+                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                       font=("Segoe UI", 9)).pack(side="left", padx=(0, 8))
+    tk.Label(win, text="Default", bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
+    vb = tk.Button(win, text="\U0001F3A4 " + default_label + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                    relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9), anchor="w", width=28)
     vb.configure(command=lambda: menu.tk_popup(vb.winfo_rootx(), vb.winfo_rooty() + vb.winfo_height()))
     vb.grid(row=4, column=1, padx=(0, 10), pady=(4, 2), sticky="w")
     def slider(row, label, lo, hi, res, val, key):
-        tk.Label(win, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=row, column=0, padx=(10, 0))
-        sc = tk.Scale(win, from_=lo, to=hi, resolution=res, orient="horizontal", length=200,
+        tk.Label(win, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=row, column=0, padx=(10, 0))
+        sc = tk.Scale(win, from_=lo, to=hi, resolution=res, orient="horizontal", length=220,
                       bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0,
                       activebackground=ACCENT, sliderrelief="flat", font=("Segoe UI", 8))
         sc.set(val)
         sc.grid(row=row, column=1, padx=(0, 10))
-        def changed(v): tune()[key] = float(v) if key == "speed" else int(float(v)); save_tune()
+        def changed(value, key=key):
+            voice_tune(default_label)[key] = float(value) if key == "speed" else int(float(value))
+            save_tune()
         sc.configure(command=changed)
-    slider(1, "Speed", 0.5, 2.0, 0.1, t["speed"], "speed")
-    slider(2, "Pitch", -10, 10, 1, t["pitch"], "pitch")
-    bar2 = tk.Frame(win, bg=BG); bar2.grid(row=5, column=0, columnspan=2, pady=(6, 8))
+    slider(1, "Speed", 0.5, 2.0, 0.1, settings["speed"], "speed")
+    slider(2, "Pitch", -10, 10, 1, settings["pitch"], "pitch")
+    new_var = tk.BooleanVar(value=bool(bot_state.get("new_bots", True)))
+    read_vars = {}
+    def on_new():
+        bot_state["new_bots"] = bool(new_var.get())
+        save_bot_prefs()
+        for name, var in read_vars.items():
+            row = bot_state["bots"].get(name) or {}
+            if "read" not in row:
+                var.set(bot_prefs.allows_auto(bot_state, name))
+    tk.Checkbutton(win, text="New bots on by default", variable=new_var, command=on_new,
+                   bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                   font=("Segoe UI", 9), anchor="w").grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 0))
+    tk.Label(win, text="Bots", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(row=7, column=0, columnspan=2, sticky="w", padx=10)
+    holder = tk.Frame(win, bg=BG)
+    holder.grid(row=8, column=0, columnspan=2, sticky="ew", padx=8)
+    box = tk.Canvas(holder, bg=BG, highlightthickness=0, height=160, width=420)
+    box.pack(side="left", fill="both")
+    inner = tk.Frame(box, bg=BG)
+    box.create_window((0, 0), window=inner, anchor="nw")
+    def fit(_event=None):
+        box.configure(scrollregion=box.bbox("all"))
+    inner.bind("<Configure>", fit)
+    names = sorted(bot_state["bots"])
+    if not names:
+        tk.Label(inner, text="Bots show up here after a chat is seen.", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=4, pady=4)
+    voice_labels = ["Default voice"] + [ch[0] for ch in choices]
+    for name in names:
+        row = bot_state["bots"].setdefault(name, {})
+        block = tk.Frame(inner, bg=BG)
+        block.pack(fill="x", pady=3)
+        read_var = tk.BooleanVar(value=bot_prefs.allows_auto(bot_state, name))
+        read_vars[name] = read_var
+        def on_read(name=name, var=read_var):
+            bot_state["bots"].setdefault(name, {})["read"] = bool(var.get())
+            save_bot_prefs()
+        tk.Checkbutton(block, text=name, variable=read_var, command=on_read,
+                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                       font=("Segoe UI", 9), anchor="w").pack(anchor="w")
+        picked = (row.get("voice") or "").strip() or "Default voice"
+        voice_btn = tk.Button(block, text=picked + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
+                               relief="flat", bd=0, padx=8, pady=2, font=("Segoe UI", 8), anchor="w")
+        menu_b = tk.Menu(win, tearoff=0, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG, font=("Segoe UI", 8))
+        def choose(label, name=name, button=voice_btn):
+            stored = "" if label == "Default voice" else label
+            bot_state["bots"].setdefault(name, {})["voice"] = stored
+            save_bot_prefs()
+            button.configure(text=(stored or "Default voice") + "  \u25BE")
+        for label in voice_labels:
+            menu_b.add_command(label=label, command=lambda label=label: choose(label))
+        voice_btn.configure(command=lambda menu_b=menu_b, voice_btn=voice_btn: menu_b.tk_popup(voice_btn.winfo_rootx(), voice_btn.winfo_rooty() + voice_btn.winfo_height()))
+        voice_btn.pack(anchor="w", padx=18)
+        speeds = tk.Frame(block, bg=BG)
+        speeds.pack(fill="x", padx=18)
+        base = voice_tune(picked if picked != "Default voice" else default_label)
+        for key, lo, hi, res, caption in (("speed", 0.5, 2.0, 0.1, "Speed"), ("pitch", -10, 10, 1, "Pitch")):
+            tk.Label(speeds, text=caption, bg=BG, fg=DIM, font=("Segoe UI", 8), width=6, anchor="w").pack(side="left")
+            start = row.get(key)
+            if not isinstance(start, (int, float)):
+                start = base[key]
+            sc = tk.Scale(speeds, from_=lo, to=hi, resolution=res, orient="horizontal", length=120,
+                          bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0,
+                          activebackground=ACCENT, sliderrelief="flat", font=("Segoe UI", 7))
+            sc.set(start)
+            def changed(value, name=name, key=key):
+                number = float(value) if key == "speed" else int(float(value))
+                bot_state["bots"].setdefault(name, {})[key] = number
+                save_bot_prefs()
+            sc.configure(command=changed)
+            sc.pack(side="left")
+    tk.Label(win, text="Unchecked bots are not read aloud. Back, Next, and Play still speak them.",
+             bg=BG, fg=DIM, font=("Segoe UI", 8), wraplength=420, justify="left").grid(row=9, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 0))
+    bar2 = tk.Frame(win, bg=BG)
+    bar2.grid(row=10, column=0, columnspan=2, pady=(6, 8))
     def reset():
-        tune_all[speak_state["label"]] = {"speed": 1.0, "pitch": 0}; save_tune(); win.destroy(); tuner["win"] = None; open_tuner()
-    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (win.destroy(), tuner.update(win=None)))):
+        tune_all[default_label] = {"speed": 1.0, "pitch": 0}
+        save_tune()
+        win.destroy()
+        tuner["win"] = None
+        open_tuner()
+    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
         tk.Button(bar2, text=txt, command=cmd, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                   relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9)).pack(side="left", padx=4)
     win.update_idletasks()
-    win.geometry(f"+{root.winfo_x() + W - win.winfo_width()}+{root.winfo_y() - win.winfo_height() - 8}")
+    win.geometry(f"+{root.winfo_x() + W - win.winfo_width()}+{max(0, root.winfo_y() - win.winfo_height() - 8)}")
     tuner["win"] = win
 
-# voice switcher (click to cycle voices)
+# voice switcher
 short = [ch[0] for ch in choices]
 def set_voice(i):
     use_choice(i)
-    open(SAVED, "w").write(short[i])
+    path = platform.saved_voice_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(short[i])
     if tuner["win"] is not None:   # refresh the settings panel for the new voice
-        tuner["win"].destroy(); tuner["win"] = None
+        tuner["win"].destroy()
+        tuner["win"] = None
         open_tuner()
 menu = tk.Menu(root, tearoff=0, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG, font=("Segoe UI", 9))
-for i, n in enumerate(short):
-    menu.add_command(label=n, command=lambda i=i: set_voice(i))
-menu.add_separator()
-menu.add_command(label="\u2795  Get More Voices...", command=lambda: os.startfile("ms-settings:speech"))
 def key_dialog():
-    win = tk.Toplevel(root); win.title("xAI API key"); win.configure(bg=PANEL); win.attributes("-topmost", True)
-    tk.Label(win, text="Paste your xAI API key (from console.x.ai).\nIt's saved encrypted for your Windows account only.",
+    win = tk.Toplevel(root)
+    win.title("xAI API key")
+    win.configure(bg=PANEL)
+    win.attributes("-topmost", True)
+    tk.Label(win, text=platform.key_help(),
              bg=PANEL, fg=FG, font=("Segoe UI", 9), justify="left").pack(padx=12, pady=(10, 6), anchor="w")
-    e = tk.Entry(win, show="\u2022", width=44, bg="#11151c", fg=FG, insertbackground=FG, relief="flat")
-    e.pack(padx=12, pady=4); e.focus_set()
+    entry = tk.Entry(win, show="\u2022", width=44, bg="#11151c", fg=FG, insertbackground=FG, relief="flat")
+    entry.pack(padx=12, pady=4)
+    entry.focus_set()
     def ok():
-        k = e.get().strip()
-        if k:
-            save_key(k)
+        key = entry.get().strip()
+        if key:
+            try:
+                platform.save_key(key)
+            except Exception as exc:
+                log("could not save the xAI key: %r" % (exc,))
+                return
             gi = next((i for i, ch in enumerate(choices) if ch[1] == "grok"), None)
             if gi is not None:
                 set_voice(gi)
         win.destroy()
     tk.Button(win, text="Save", command=ok, bg=ACCENT, fg="white", relief="flat", padx=14).pack(pady=(6, 10))
     win.bind("<Return>", lambda ev: ok())
-menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
+
+def fill_voice_menu():
+    menu.delete(0, "end")
+    for i, n in enumerate(short):
+        menu.add_command(label=n, command=lambda i=i: set_voice(i))
+    menu.add_separator()
+    menu.add_command(label="\u2795  Get More Voices...", command=platform.open_more_voices)
+    menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
+
+def refresh_downloaded_voices():
+    """Rebuild the picker after Piper voices land, and start on Jenny if unset."""
+    global saved
+    fresh = platform.voice_choices()
+    chief = chief_name()
+    voice_id, _speed = grok_store.chief_voice(platform.persistence_dir(), chief)
+    if voice_id:
+        fresh.insert(0, ("%s's voice (Grok)" % chief, "grok", voice_id))
+    if not fresh:
+        fresh.append(("English (espeak-ng)", "espeak", "en"))
+    choices[:] = fresh
+    short[:] = [ch[0] for ch in choices]
+    saved = piper_setup.preferred_index(short, saved_voice_label())
+    use_choice(saved)
+    fill_voice_menu()
+    if tuner["win"] is not None:
+        tuner["win"].destroy()
+        tuner["win"] = None
+        open_tuner()
+
+def download_piper_voices():
+    def progress(message):
+        hold_status["text"] = message
+    try:
+        ready = piper_setup.ensure(platform.piper_dir(), sys.platform, progress)
+    except Exception as exc:
+        log("piper download: %r" % (exc,))
+        ready = False
+    def finish():
+        if ready:
+            refresh_downloaded_voices()
+            hold_status["text"] = ""
+        else:
+            hold_status["text"] = "Piper voices unavailable. Using built-in voices."
+            root.after(5000, lambda: hold_status.update(text=""))
+    root.after(0, finish)
+
+fill_voice_menu()
 
 # ---------- watcher loop ----------
-_first = bot_replies()
-state = {"seen": set(_first), "history": list(_first), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0}
+# Replies already on screen at launch are history. Only a reply that appears
+# after this baseline is read aloud. Back and Next can still walk the history.
+_lines, _keys, _active = chat_snapshot()
+_seen = set()
+grok_store.mark_seen(_seen, _keys)
+state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
+         "file_key": _active, "prev_cur": list(_lines)}
 
 def tick():
     if flags["quit"]:
+        save_window()
         say("")
+        _instance.release()
         root.destroy()
         return
     if flags["stop"]:            # Stop: end this reply and stop watching until Play
@@ -492,26 +825,32 @@ def tick():
         flags["pause"] = False
         state["paused"] = False
         say("")
+    manual = None
     if flags["play"]:
         flags["play"] = False
-        if state["stopped"]:     # back to watching; anything that came in while stopped is skipped
+        resuming = state["paused"]
+        if state["stopped"]:     # back to watching; anything already on screen is skipped
             state["stopped"] = False
-            state["seen"].update(bot_replies())
-            state["prev_cur"] = list(bot_replies())
+            state["history"] = absorb_current()
+        history = state["history"]
+        if history and not resuming:
+            shown = history[-1] if state["pos"] is None else history[state["pos"]]
+            if not bot_prefs.allows_auto(bot_state, bot_of(shown)):
+                manual = shown
     if flags["back"]:
         flags["back"] = False
-        h = state["history"]
-        if h:
-            state["pos"] = len(h) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
+        history = state["history"]
+        if history:
+            state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
             state["queue"].clear()
-            say(announce(h[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
     if flags["skip"]:   # Next
         flags["skip"] = False
-        h = state["history"]
-        if state["pos"] is not None and state["pos"] < len(h) - 1:
+        history = state["history"]
+        if state["pos"] is not None and state["pos"] < len(history) - 1:
             state["pos"] += 1          # step forward through history
             state["queue"].clear()
-            say(announce(h[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
         else:
             # stop the current reply now and go back to watching for a new one
             state["queue"].clear()
@@ -523,56 +862,100 @@ def tick():
             pause_audio()       # silent; remembers the spot in this reply
         else:
             resume_audio()      # carry on from that spot, then keep watching
-            state["seen"].update(bot_replies())   # skip what came in while paused
+            absorb_current()    # skip what came in while paused
+    if manual:
+        say(announce(manual), bot=bot_of(manual))
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
-            cur = bot_replies()
+            cur, keys, active = chat_snapshot()
             seen = state["seen"]
-            known = [i for i, r in enumerate(cur) if r in seen]
-            prev = state.get("prev_cur", [])
-            if cur:
-                state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
-            def who(r):
-                return next((n for n in BOT_NAMES if r.startswith(n + " ")), r.partition(" ")[0])
-            switched = bool(cur) and (
-                (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
-                or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
-                or (not known and (prev or len(cur) > 1)))
-            if switched:
-                # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
-                seen.update(cur)
-                state["history"] = list(cur)
-                state["queue"].clear()
-                # read only the bottom reply of the new chat; Back steps up from there
-                state["pos"] = len(cur) - 1
-                say(announce(cur[-1]))
-            else:
-                last_known = known[-1] if known else -1
-                for i, reply in enumerate(cur):
-                    if reply in seen:
-                        continue
-                    seen.add(reply)
-                    if i < last_known:
-                        continue   # older message (scrolled into view), not new
-                    state["history"].append(reply)
+            if active is not None:
+                # Linux files: a new or rewritten chat is a baseline, like Stop then Play.
+                # Only ids that show up on a later look are read. Position is ignored.
+                if active != state.get("file_key"):
+                    state["file_key"] = active
+                    grok_store.mark_seen(seen, keys)
+                    state["history"] = list(cur)
+                    state["prev_cur"] = list(cur)
+                    state["queue"].clear()
                     state["pos"] = None
-                    state["queue"].append(reply)
+                else:
+                    for line in grok_store.unseen_lines(seen, cur, keys):
+                        state["history"].append(line)
+                        state["pos"] = None
+                        state["queue"].append(line)
+            else:
+                known = [i for i, reply in enumerate(cur) if reply in seen]
+                prev = state.get("prev_cur", [])
+                if grok_store.launch_is_baseline(seen, cur, prev):
+                    # The window was not ready at launch. This first view is history.
+                    seen.update(cur)
+                    state["history"] = list(cur)
+                    state["prev_cur"] = list(cur)
+                    state["queue"].clear()
+                    state["pos"] = None
+                    known = list(range(len(cur)))
+                    prev = list(cur)
+                if cur:
+                    state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
+                def who(reply):
+                    return next((name for name in BOT_NAMES if reply.startswith(name + " ")), reply.partition(" ")[0])
+                switched = bool(cur) and not grok_store.launch_is_baseline(seen, cur, prev) and (
+                    (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
+                    or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
+                    or (not known and (prev or len(cur) > 1)))
+                if switched:
+                    # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
+                    bottom = cur[-1]
+                    already = bottom in seen or any(key in seen for key in (keys[-1] if keys else []))
+                    seen.update(cur)
+                    for keyset in keys:
+                        seen.update(keyset)
+                    state["history"] = list(cur)
+                    state["queue"].clear()
+                    # A message already spoken this session stays quiet. Back steps up from here.
+                    state["pos"] = len(cur) - 1
+                    if not already and bot_prefs.allows_auto(bot_state, bot_of(bottom)):
+                        say(announce(bottom), bot=bot_of(bottom))
+                else:
+                    last_known = known[-1] if known else -1
+                    for i, reply in enumerate(cur):
+                        if reply in seen:
+                            continue
+                        seen.add(reply)
+                        if i < last_known:
+                            continue   # older message (scrolled into view), not new
+                        state["history"].append(reply)
+                        state["pos"] = None
+                        state["queue"].append(reply)
         except Exception:
             pass
     speaking = is_speaking()
     if state["queue"] and not speaking and not state["paused"] and not state["stopped"]:
-        say(announce(state["queue"].pop(0)))
-        speaking = True
+        pending = state["queue"].pop(0)
+        who = bot_of(pending)
+        if bot_prefs.allows_auto(bot_state, who):
+            say(announce(pending), bot=who)
+            speaking = True
     if state["stopped"] and not speaking:
         new = "Stopped"
     elif state["paused"]:
         new = "Paused"
     else:
         new = "Reading" if speaking else "Watching"
-    if status.get() != new:
+    if hold_status["text"]:
+        if status.get() != hold_status["text"]:
+            status.set(hold_status["text"])
+    elif status.get() != new:
         status.set(new)
     root.after(200, tick)
 
-root.after(200, tick)
-root.mainloop()
+if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
+    root.update_idletasks()
+    root.update()
+    root.destroy()
+else:
+    threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
+    root.after(200, tick)
+    root.mainloop()
