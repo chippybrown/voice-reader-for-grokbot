@@ -359,8 +359,8 @@ rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
 
 # title + status
 c.create_text(16, 16, text="🔊  Grokbot Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
-dot = c.create_oval(218, 45, 228, 55, fill=ACCENT, outline="")
-stxt = c.create_text(232, 50, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
+dot = c.create_oval(150, 11, 160, 21, fill=ACCENT, outline="")
+stxt = c.create_text(164, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
 def show_status(*_):
     v = status.get()
@@ -382,11 +382,11 @@ def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12):
         c.tag_bind(item, "<Enter>", lambda e: (c.itemconfig(b, fill="#3a4256"), c.itemconfig(stxt, text=tip)))
         c.tag_bind(item, "<Leave>", lambda e: (c.itemconfig(b, fill=PANEL), show_status()))
         c.tag_bind(item, "<Button-1>", lambda e: action())
-icon_button(32,  "\u23EE", "Back", lambda: flags.update(back=True))
-icon_button(72,  "\u25A0", "Stop", lambda: flags.update(stop=True))
-icon_button(112, "\u275A\u275A", "Pause", lambda: flags.update(pause=True))
-icon_button(152, "\u25B6", "Resume", lambda: flags.update(pause=False), ACCENT)
-icon_button(192, "\u23ED", "Next", lambda: flags.update(skip=True))
+icon_button(70,  "\u23EE", "Back", lambda: flags.update(back=True))
+icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True))
+icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True))
+icon_button(190, "\u25B6", "Resume", lambda: flags.update(pause=False), ACCENT)
+icon_button(230, "\u23ED", "Next", lambda: flags.update(skip=True))
 icon_button(W-50, "\u2699", "Settings", lambda: open_tuner(), y=17, r=11, size=10)
 icon_button(W-22, "\u23FB", "Turn off", lambda: flags.update(quit=True), RED, y=17, r=11, size=10)
 
