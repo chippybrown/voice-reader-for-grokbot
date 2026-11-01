@@ -101,7 +101,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
@@ -213,7 +213,7 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
-  --hidden-import version --hidden-import bot_prefs \
+  --hidden-import version --hidden-import bot_prefs --hidden-import window_layout \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh
