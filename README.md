@@ -18,7 +18,7 @@ On Linux Mint, install the Grok Bot desktop app as well. Grokbot Voice reads tha
 
 1. On the [Releases](https://github.com/chippybrown/voice-reader-for-grokbot/releases) page, download `Grokbot Voice.exe` and put it on your desktop.
 2. Double-click it. Windows SmartScreen may warn you, because the app is not code-signed yet. Click **More info**, then **Run anyway**.
-3. The toolbar starts in the lower right of the screen. Drag it anywhere you like. Drag an edge or a corner to make it wide and short, or tall and skinny. The buttons wrap, and stack in a column when the window is narrow. The size and place are remembered the next time you open it. It stays above your other windows.
+3. The toolbar starts in the lower right of the screen. Drag it anywhere you like. Drag an edge or a corner to make it wide and short, or tall and skinny. The buttons wrap, and stack in a column when the window is narrow. In Settings, **Toolbar** can be **Horizontal** or **Vertical**. Vertical stacks every button from top to bottom, which suits a screen edge or a portrait monitor. The size, the place, and that choice are remembered the next time you open it. It stays above your other windows.
 
 ## Voices
 
@@ -80,7 +80,7 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 - `%APPDATA%\Grok Reader voice.txt` remembers the voice you picked
 - `%APPDATA%\Grok Voice\voice settings.json` remembers speed and pitch for each voice
 - `%APPDATA%\Grok Voice\bot settings.json` remembers each bot's voice, speed, pitch, and whether it is read aloud
-- `%APPDATA%\Grok Voice\window.json` remembers the window size and position. On Linux that file is `~/.config/grokbot-voice/window.json`
+- `%APPDATA%\Grok Voice\window.json` remembers the window size, position, and whether the toolbar is horizontal or vertical. On Linux that file is `~/.config/grokbot-voice/window.json`
 - `%APPDATA%\Grok Voice\piper` is where Piper voice files go
 - `%APPDATA%\Grok Voice\xai key.bin` is your xAI API key, encrypted for your Windows account
 - `%APPDATA%\Grok Voice\chief of staff.txt` is optional. Put a bot's name on the first line if the chief of staff should be someone other than Moya

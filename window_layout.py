@@ -20,25 +20,33 @@ def _cols(width, count):
     return max(1, min(count, room // CELL))
 
 
-def min_height(width):
+def normalize_layout(value):
+    """'vertical' stacks the buttons. Anything else stays horizontal."""
+    return "vertical" if str(value or "").strip().lower() == "vertical" else "horizontal"
+
+
+def min_height(width, layout="horizontal"):
     """Shortest window that still fits the controls at this width."""
     width = max(MIN_W, int(width))
+    if normalize_layout(layout) == "vertical":
+        return HEADER_NARROW + (len(TRANSPORT) + len(CORNER)) * CELL + PAD
     if width >= WIDE:
         return HEADER_WIDE + CELL + PAD
-    rows = (len(TRANSPORT) + len(CORNER) + _cols(width, len(TRANSPORT) + len(CORNER)) - 1) // _cols(width, len(TRANSPORT) + len(CORNER))
+    count = len(TRANSPORT) + len(CORNER)
+    rows = (count + _cols(width, count) - 1) // _cols(width, count)
     return max(MIN_H, HEADER_NARROW + rows * CELL + PAD)
 
 
-def clamp_size(width, height):
+def clamp_size(width, height, layout="horizontal"):
     """Grow a too-small drag so the buttons still fit."""
     width = max(MIN_W, int(width))
-    height = max(min_height(width), int(height))
+    height = max(min_height(width, layout), int(height))
     return width, height
 
 
-def clamp_origin(x, y, width, height, screen_w, screen_h):
+def clamp_origin(x, y, width, height, screen_w, screen_h, layout="horizontal"):
     """Keep a slice of the window on the screen."""
-    width, height = clamp_size(width, height)
+    width, height = clamp_size(width, height, layout)
     screen_w = max(width, int(screen_w or width))
     screen_h = max(height, int(screen_h or height))
     x = min(max(int(x), 8 - width), screen_w - 24)
@@ -66,14 +74,28 @@ def _wrap(names, width, top, radius):
     return placed
 
 
-def arrange(width, height):
+def arrange(width, height, layout="horizontal"):
     """Title point, status point, and button centers for this window.
 
-    A wide window keeps playback on one row and the gear and power on the
-    title line. A narrower window wraps those buttons, and a skinny window
-    stacks them.
+    Horizontal keeps playback on one row when the window is wide, and wraps
+    when it is narrow. Vertical always stacks every button from top to bottom.
     """
-    width, height = clamp_size(width, height)
+    layout = normalize_layout(layout)
+    width, height = clamp_size(width, height, layout)
+    if layout == "vertical":
+        radius = 15
+        left = max(PAD + radius, (width - radius * 2) // 2)
+        buttons = [
+            (name, left, HEADER_NARROW + radius + index * CELL, radius)
+            for index, name in enumerate(TRANSPORT + CORNER)
+        ]
+        return {
+            "width": width,
+            "height": height,
+            "title": (12, 14),
+            "status": (12, 34),
+            "buttons": buttons,
+        }
     if width >= WIDE:
         buttons = _row(TRANSPORT, width, HEADER_WIDE + 4, 15)
         buttons.append(("gear", width - 50, 17, 11))

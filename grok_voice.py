@@ -354,14 +354,16 @@ def window_file():
 def saved_window():
     try:
         data = json.load(open(window_file(), encoding="utf-8"))
-        w, h = window_layout.clamp_size(data["w"], data["h"])
-        x, y = window_layout.clamp_origin(data["x"], data["y"], w, h, sw, sh)
-        return w, h, x, y
+        layout = window_layout.normalize_layout(data.get("layout"))
+        w, h = window_layout.clamp_size(data["w"], data["h"], layout)
+        x, y = window_layout.clamp_origin(data["x"], data["y"], w, h, sw, sh, layout)
+        return w, h, x, y, layout
     except Exception:
         w, h = window_layout.DEFAULT_W, window_layout.DEFAULT_H
-        return w, h, int(sw - w - sw * 0.10), int(sh - h - sh * 0.05)
+        return w, h, int(sw - w - sw * 0.10), int(sh - h - sh * 0.05), "horizontal"
 
-W, H, OX, OY = saved_window()
+window_state = {"layout": "horizontal"}
+W, H, OX, OY, window_state["layout"] = saved_window()
 root.geometry("%dx%d+%d+%d" % (W, H, OX, OY))
 
 c = tk.Canvas(root, width=W, height=H, bg=_bar_bg, highlightthickness=0)
@@ -432,12 +434,13 @@ def edge_at(x, y):
 def save_window():
     try:
         os.makedirs(platform.config_dir(), exist_ok=True)
-        json.dump({"w": root.winfo_width(), "h": root.winfo_height(), "x": root.winfo_x(), "y": root.winfo_y()},
+        json.dump({"w": root.winfo_width(), "h": root.winfo_height(), "x": root.winfo_x(), "y": root.winfo_y(),
+                   "layout": window_state["layout"]},
                   open(window_file(), "w", encoding="utf-8"))
     except Exception:
         pass
 def apply_box(x, y, width, height):
-    width, height = window_layout.clamp_size(width, height)
+    width, height = window_layout.clamp_size(width, height, window_state["layout"])
     if "w" in resize.get("edge", ""):
         x = resize["gx"] + resize["w"] - width
     if "n" in resize.get("edge", ""):
@@ -539,10 +542,10 @@ icon_button(W-50, "\u2699", bot_prefs.TOOLBAR_TIPS["gear"], lambda: open_tuner()
 icon_button(W-22, "\u23FB", bot_prefs.TOOLBAR_TIPS["power"], lambda: flags.update(quit=True), RED, y=17, r=11, size=10, name="power")
 
 def relayout(width, height):
-    width, height = window_layout.clamp_size(width, height)
+    width, height = window_layout.clamp_size(width, height, window_state["layout"])
     c.configure(width=width, height=height)
     c.coords(shell, *rounded_points(1, 1, max(2, width - 1), max(2, height - 1), min(22, width // 4, height // 4)))
-    plan = window_layout.arrange(width, height)
+    plan = window_layout.arrange(width, height, window_state["layout"])
     c.coords(title_id, *plan["title"])
     sx, sy = plan["status"]
     c.coords(dot, sx, sy - 5, sx + 10, sy + 5)
@@ -571,6 +574,20 @@ def open_tuner():
     win.attributes("-topmost", True)
     win.configure(bg=BG, highlightthickness=1, highlightbackground="#3a4256")
     tk.Label(win, text=APP_TITLE, bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
+    tk.Label(win, text="Toolbar", bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=3, column=0, padx=(10, 0), sticky="w")
+    layout_row = tk.Frame(win, bg=BG)
+    layout_row.grid(row=3, column=1, sticky="w", padx=(0, 10))
+    layout_var = tk.StringVar(value=window_state["layout"])
+    def choose_layout():
+        window_state["layout"] = window_layout.normalize_layout(layout_var.get())
+        width, height = window_layout.clamp_size(root.winfo_width(), root.winfo_height(), window_state["layout"])
+        root.geometry("%dx%d+%d+%d" % (width, height, root.winfo_x(), root.winfo_y()))
+        relayout(width, height)
+        save_window()
+    for value, caption in (("horizontal", "Horizontal"), ("vertical", "Vertical")):
+        tk.Radiobutton(layout_row, text=caption, variable=layout_var, value=value, command=choose_layout,
+                       bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                       font=("Segoe UI", 9)).pack(side="left", padx=(0, 8))
     tk.Label(win, text="Default", bg=BG, fg=DIM, font=("Segoe UI", 9), width=8, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
     vb = tk.Button(win, text="\U0001F3A4 " + default_label + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                    relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9), anchor="w", width=28)

@@ -39,3 +39,15 @@ class LayoutTests(unittest.TestCase):
         x, y = window_layout.clamp_origin(-400, 5000, 200, 80, 800, 600)
         self.assertGreater(x + 200, 0)
         self.assertLess(y, 600)
+
+    def test_vertical_stacks_even_when_the_window_is_wide(self):
+        self.assertEqual(window_layout.normalize_layout("Vertical"), "vertical")
+        self.assertEqual(window_layout.normalize_layout(""), "horizontal")
+        plan = window_layout.arrange(460, 80, "vertical")
+        order = [item[0] for item in plan["buttons"]]
+        self.assertEqual(order, list(window_layout.TRANSPORT + window_layout.CORNER))
+        xs = {item[1] for item in plan["buttons"]}
+        ys = [item[2] for item in plan["buttons"]]
+        self.assertEqual(len(xs), 1)
+        self.assertEqual(ys, sorted(ys))
+        self.assertGreater(plan["height"], 280)
