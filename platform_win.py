@@ -5,7 +5,6 @@ import time
 import wave
 
 import grok_store
-import wake_cmd
 from audio_util import pitch_ratio, scale_wav_rate
 
 ASYNC, PURGE = 1, 2
@@ -34,10 +33,6 @@ def piper_dir():
 
 def chief_path():
     return os.path.join(config_dir(), "chief of staff.txt")
-
-
-def wake_name_path():
-    return os.path.join(config_dir(), "wake-name.txt")
 
 
 def log_path():
@@ -317,150 +312,3 @@ def install_hotkeys(flags):
     keyboard.add_hotkey("ctrl+alt+p", lambda: flags.update(pause=not flags["pause"]))
     keyboard.add_hotkey("ctrl+alt+q", lambda: flags.update(quit=True))
 
-
-def play_chime(path):
-    """Play beside any current reply. SND_NOSTOP refuses to cut off speech."""
-    import winsound
-    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NOSTOP)
-
-
-# Programs we have already switched, so Unmute can put them back after they exit.
-_touched_exes = []
-
-
-def set_grok_mic_muted(muted):
-    """Stop Grok Bot hearing the mic, and leave this app's listener alone.
-
-    Muting the capture endpoint (IAudioEndpointVolume.SetMute) mutes the stream
-    entering the microphone device, so every shared-mode program goes silent,
-    including our wake-phrase listener. Microsoft also documents that, for a
-    shared-mode capture stream, ISimpleAudioVolume is tied to that same
-    endpoint control, so muting Grok Bot's capture session is not a separate
-    switch. Either one would make the wake phrase inaudible.
-
-    Windows does publish a per-app microphone permission. It is the switch in
-    Settings, Privacy, Microphone. We turn that off for Grok Bot.exe only, under
-    the current user's ConsentStore. Our own process is never written there.
-    A capture Grok Bot already has open can keep sending audio until that app
-    opens the microphone again. While the mute is on we write the block again
-    about once a second, so a stream it opens later is blocked.
-    """
-    exes = _grok_bot_exes()
-    if muted:
-        if not exes and not _touched_exes:
-            _note("Mic mute: Grok Bot.exe was not found, so the microphone was left on.")
-            return
-        for exe in exes:
-            _set_consent(exe, "Deny")
-            if exe not in _touched_exes:
-                _touched_exes.append(exe)
-    else:
-        for exe in list(_touched_exes) or exes:
-            _set_consent(exe, "Allow")
-        _touched_exes.clear()
-
-
-def _grok_bot_exes():
-    found = []
-    for path in _running_exes() + _installed_exes():
-        if path and wake_cmd.is_grok_bot_name(path) and path not in found:
-            found.append(path)
-    return found
-
-
-def _installed_exes():
-    local = os.environ.get("LOCALAPPDATA", "")
-    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-    candidates = [
-        os.path.join(local, "Programs", "Grok Bot", "Grok Bot.exe"),
-        os.path.join(local, "Grok Bot", "Grok Bot.exe"),
-        os.path.join(program_files, "Grok Bot", "Grok Bot.exe"),
-    ]
-    return [path for path in candidates if os.path.isfile(path)]
-
-
-def _running_exes():
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except Exception:
-        return []
-    TH32CS_SNAPPROCESS = 0x00000002
-    kernel = ctypes.windll.kernel32
-
-    class PROCESSENTRY32W(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_size_t),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", ctypes.c_long),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", wintypes.WCHAR * 260),
-        ]
-
-    snap = kernel.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if not snap or snap == ctypes.c_void_p(-1).value:
-        return []
-    entry = PROCESSENTRY32W()
-    entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
-    found = []
-    try:
-        if not kernel.Process32FirstW(snap, ctypes.byref(entry)):
-            return []
-        while True:
-            if wake_cmd.is_grok_bot_name(entry.szExeFile):
-                path = _image_path(entry.th32ProcessID) or entry.szExeFile
-                if wake_cmd.is_grok_bot_name(path):
-                    found.append(path)
-            if not kernel.Process32NextW(snap, ctypes.byref(entry)):
-                break
-    except Exception:
-        return found
-    finally:
-        kernel.CloseHandle(snap)
-    return found
-
-
-def _image_path(pid):
-    import ctypes
-    from ctypes import wintypes
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    kernel = ctypes.windll.kernel32
-    handle = kernel.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return ""
-    try:
-        size = wintypes.DWORD(32768)
-        buf = ctypes.create_unicode_buffer(size.value)
-        if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-            return buf.value
-    except Exception:
-        return ""
-    finally:
-        kernel.CloseHandle(handle)
-    return ""
-
-
-def _set_consent(exe, allow_or_deny):
-    import winreg
-    key_path = (
-        r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager"
-        r"\ConsentStore\microphone\NonPackaged\%s" % wake_cmd.consent_key_name(exe)
-    )
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-        winreg.SetValueEx(key, "Value", 0, winreg.REG_SZ, allow_or_deny)
-        filetime = int((time.time() + 11644473600) * 10000000)
-        winreg.SetValueEx(key, "LastSetTime", 0, winreg.REG_QWORD, filetime)
-
-
-def _note(msg):
-    try:
-        os.makedirs(os.path.dirname(log_path()), exist_ok=True)
-        with open(log_path(), "a", encoding="utf-8") as handle:
-            handle.write(time.strftime("%H:%M:%S ") + msg + "\n")
-    except OSError:
-        pass

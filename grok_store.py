@@ -212,29 +212,6 @@ def roster_names(directory):
     return names
 
 
-def primary_bot_name(directory):
-    """The marked primary bot, or the first bot on the roster."""
-    rows = roster_rows(directory)
-    for row in rows:
-        if row.get("primary") in (True, "true", 1) or row.get("isPrimary") in (True, "true", 1):
-            name = row.get("name")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-    for row in rows:
-        name = row.get("name")
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-    return ""
-
-
-def active_bot_name(directory):
-    """Name of the bot whose transcript was saved most recently."""
-    transcript = active_transcript(directory)
-    if transcript is None:
-        return ""
-    return roster_names(directory).get(transcript["agent_id"]) or ""
-
-
 def chief_voice(directory, name):
     """The bot's saved voiceId from whatever slice stores it. ('carina', 1.0) for Moya."""
     pat = re.compile(r'\{"id":"[0-9a-f-]{36}","name":"%s"' % re.escape(name))

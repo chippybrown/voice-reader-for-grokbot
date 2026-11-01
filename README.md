@@ -77,23 +77,6 @@ These work from any window:
 
 On Linux these shortcuts use the normal keyboard and do not need an administrator password. Linux Mint Cinnamon uses X11, where they work. On a Wayland session they usually do not, and the on-screen buttons still do.
 
-## Voice commands
-
-Voice commands are on unless you turn them off. Grokbot Voice listens with the computer's microphone for a few phrases that start with your bot's name. That microphone use is separate from the one Grok Bot uses when you talk to it.
-
-The name is your chief of staff if you have set one, otherwise the primary bot on your roster, otherwise whoever is in the open chat. Open the gear and edit **Wake name** if you want a different word. If your chief of staff is Larry, the phrases are:
-
-- Say **Larry sleep** or **Larry mute**. Your voice stops reaching Grok Bot. Replies keep being read. The bar says **Mic muted**, a crossed-out microphone appears, and a short chime plays.
-- Say **Larry wake**, **Larry wake up**, **Larry listen**, or **Larry un mute**. Grok Bot can hear you again, and a higher chime plays. The small offline model does not know the single word "unmute", so that word is not a command.
-
-If several of those phrases are heard in one breath, the last one wins. Extra noise around them is ignored. The phrases are ignored while a reply is being read, so the bot's own voice cannot mute the microphone. Stop, Pause, and Play are unchanged.
-
-The first time you use this, Grokbot Voice downloads a small offline English speech model (about 40 MB) into its settings folder. After that, the phrases are recognized on this computer. If the model does not know your bot's name, it still listens and accepts a close-sounding name, and the log suggests picking a simpler wake name. Turn it off from the gear menu with **Voice commands (Larry mute / Larry wake)**, using your own name in place of Larry.
-
-On Linux Mint, only Grok Bot's recording is muted, through PulseAudio or PipeWire. Grokbot Voice keeps its own microphone open so it can hear **Larry wake**. If Grok Bot starts recording again while the mute is on, that new recording is muted too.
-
-On Windows, muting the microphone device would silence every program, including Grokbot Voice, and **Larry wake** would not be heard. Windows also ties an app's capture-volume switch to that same device mute, so that is not a separate control. Grokbot Voice instead turns off Grok Bot's microphone permission, the same switch as Settings, Privacy, Microphone, and leaves every other program allowed. If Grok Bot already had the microphone open, it can keep hearing until it opens the microphone again. A new recording it starts while muted is blocked.
-
 ## Where settings are saved
 
 Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Roaming`):
@@ -112,7 +95,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --collect-all vosk --collect-all sounddevice --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import wake_cmd --hidden-import voice_listener grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
@@ -145,7 +128,7 @@ bash ~/.local/share/grokbot-voice/install-mint.sh --uninstall
 
 That removes the program, the menu entry, and the desktop icon. Your settings, Piper voices, and xAI key stay.
 
-Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it. The same panel has **Wake name**. If your bot is Larry, say **Larry mute** or **Larry sleep**, and **Larry wake** or **Larry wake up**, to control the microphone. The single word "unmute" is not a command.
+Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it.
 
 Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
 
@@ -224,9 +207,7 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
-  --hidden-import wake_cmd --hidden-import voice_listener \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
-  --collect-all vosk --collect-all sounddevice \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh
 packaging/linux/build-appimage.sh
