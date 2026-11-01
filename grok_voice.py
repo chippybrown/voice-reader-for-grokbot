@@ -532,7 +532,7 @@ def ensure_chimes():
     return down, up
 
 def apply_mic(muted):
-    """Spoken Moya mute / Moya wake. Reading is left alone."""
+    """Spoken wake-name mute or wake. Reading is left alone."""
     changed = mic["muted"] != muted
     mic["muted"] = muted
     mic["sweep"] = time.time() + 1
