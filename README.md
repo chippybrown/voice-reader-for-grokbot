@@ -6,7 +6,7 @@ A small Windows app for people who'd rather listen than read.
 
 Grokbot Voice sits on your screen as a little always-on-top toolbar. It watches the Grok Bot desktop app, and when a bot writes a new reply, it reads that reply aloud. Bot names and timestamps are skipped, so you hear the reply itself. You can use that bot's own Grok voice, a natural offline Piper voice, or a built-in Windows voice.
 
-![The Grokbot Voice toolbar: Back, Stop, Pause, Resume, Next, a green Watching light, and the gear and power buttons](docs/toolbar.png)
+![The Grokbot Voice toolbar: Back, Stop, Pause, Play, Next, a green Watching light, and the gear and power buttons](docs/toolbar.png)
 
 ## What you need
 
@@ -55,12 +55,12 @@ If the key has no credits, or it hits its spending limit, Grokbot Voice quietly 
 The buttons stay quiet. Only **Test** in Settings speaks. Everything else just does its job.
 
 - **Back** reads the previous reply. Press it again to go further back.
-- **Stop** stops the reading that is playing now.
-- **Pause** pauses in the middle of the reply and remembers the spot.
-- **Resume** continues from that spot.
+- **Stop** stops the reply that is playing and stops monitoring. The Stop button turns red, and the status says **Not monitoring**.
+- **Pause** holds in the middle of the reply and remembers the spot. The Pause button turns amber, and the status says **Reading paused**.
+- **Play** is the green button. After Stop, it starts monitoring again. Replies that arrived while monitoring was off are skipped. After Pause, Play continues from the spot where reading held.
 - **Next** steps forward through earlier replies. On the newest reply, Next stops and waits for the next new one.
 - **Gear** opens Settings. Choose a voice, then set its speed and pitch. Each voice remembers its own settings. The Grok voice uses the speed (xAI keeps it in a comfortable range). Pitch applies to Windows and Piper voices. **Test** plays a short sample, **Reset** puts that voice back to normal, and **Done** closes the panel. Open the voice list there and choose **Set xAI API key...** when you want the Grok voice.
-- **Status light** is green for Watching, blue for Reading, and yellow for Paused.
+- **Status light** is green for Watching, blue for Reading, amber for Reading paused, and red for Not monitoring.
 - **Turn off** is the red button in the top right. It closes Grokbot Voice.
 
 When you switch to another chat or another bot, reading stops and only the bottom reply of that chat is read. **Back** steps up from there.
@@ -69,8 +69,8 @@ When you switch to another chat or another bot, reading stops and only the botto
 
 These work from any window:
 
-- `Ctrl+Alt+S` stops reading
-- `Ctrl+Alt+P` pauses or resumes
+- `Ctrl+Alt+S` stops reading and stops monitoring
+- `Ctrl+Alt+P` pauses, or continues from the paused spot
 - `Ctrl+Alt+Q` quits
 
 ## Where settings are saved
@@ -94,7 +94,7 @@ pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grok
 
 The program is written to `dist\Grokbot Voice.exe`.
 
-Pushing a version tag such as `v1.0.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release. You can also start the workflow by hand from the Actions tab.
+Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release. You can also start the workflow by hand from the Actions tab.
 
 ## License
 

@@ -278,7 +278,7 @@ def is_speaking():
         return voice.Status.RunningState == 2
     return speak_state["making"] or time.time() < speak_state["busy_until"]
 
-flags = {"stop": False, "back": False, "skip": False, "pause": False, "quit": False}
+flags = {"stop": False, "back": False, "skip": False, "pause": False, "quit": False, "play": False}
 keyboard.add_hotkey("ctrl+alt+s", lambda: flags.update(stop=True))
 keyboard.add_hotkey("ctrl+alt+p", lambda: flags.update(pause=not flags["pause"]))
 keyboard.add_hotkey("ctrl+alt+q", lambda: flags.update(quit=True))
@@ -359,13 +359,28 @@ rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
 
 # title + status
 c.create_text(16, 16, text="🔊  Grokbot Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
-dot = c.create_oval(150, 11, 160, 21, fill=ACCENT, outline="")
-stxt = c.create_text(164, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
+dot = c.create_oval(138, 11, 148, 21, fill=ACCENT, outline="")
+stxt = c.create_text(152, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
+LABELS = {"Stopped": "Not monitoring", "Paused": "Reading paused"}
+btn = {}   # name -> (circle, glyph)
+def base_fill(name):
+    v = status.get()
+    if name == "stop" and v == "Stopped":
+        return RED
+    if name == "pause" and v == "Paused":
+        return "#f5b942"
+    return PANEL
 def show_status(*_):
     v = status.get()
-    c.itemconfig(stxt, text=v)
-    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942"}.get(v, DIM))
+    c.itemconfig(stxt, text=LABELS.get(v, v))
+    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942", "Stopped": RED}.get(v, DIM))
+    for name, (b, t) in btn.items():
+        c.itemconfig(b, fill=base_fill(name))
+    if "pause" in btn:
+        c.itemconfig(btn["pause"][1], fill="#1f2430" if v == "Paused" else FG)
+    if "play" in btn:   # green only while monitoring
+        c.itemconfig(btn["play"][1], fill=ACCENT if v in ("Watching", "Reading") else DIM)
 status.trace_add("write", show_status)
 
 # drag anywhere on the background
@@ -375,17 +390,20 @@ def move(e): root.geometry(f"+{root.winfo_x() + e.x - drag['x']}+{root.winfo_y()
 c.bind("<Button-1>", press); c.bind("<B1-Motion>", move)
 
 # round icon buttons
-def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12):
+def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12, name=None):
     b = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="")
     t = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size))
+    if name:
+        btn[name] = (b, t)
     for item in (b, t):
         c.tag_bind(item, "<Enter>", lambda e: (c.itemconfig(b, fill="#3a4256"), c.itemconfig(stxt, text=tip)))
-        c.tag_bind(item, "<Leave>", lambda e: (c.itemconfig(b, fill=PANEL), show_status()))
+        c.tag_bind(item, "<Leave>", lambda e: show_status())
         c.tag_bind(item, "<Button-1>", lambda e: action())
 icon_button(70,  "\u23EE", "Back", lambda: flags.update(back=True))
-icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True))
-icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True))
-icon_button(190, "\u25B6", "Resume", lambda: flags.update(pause=False), ACCENT)
+icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True), name="stop")
+icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True), name="pause")
+icon_button(190, "\u25B6", "Play / Resume", lambda: flags.update(pause=False, play=True), ACCENT, name="play")
+show_status()
 icon_button(230, "\u23ED", "Next", lambda: flags.update(skip=True))
 icon_button(W-50, "\u2699", "Settings", lambda: open_tuner(), y=17, r=11, size=10)
 icon_button(W-22, "\u23FB", "Turn off", lambda: flags.update(quit=True), RED, y=17, r=11, size=10)
@@ -460,17 +478,26 @@ menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
 
 # ---------- watcher loop ----------
 _first = bot_replies()
-state = {"seen": set(_first), "history": list(_first), "pos": None, "queue": [], "paused": False, "next": 0}
+state = {"seen": set(_first), "history": list(_first), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0}
 
 def tick():
     if flags["quit"]:
         say("")
         root.destroy()
         return
-    if flags["stop"]:
+    if flags["stop"]:            # Stop: end this reply and stop watching until Play
         flags["stop"] = False
         state["queue"].clear()
+        state["stopped"] = True
+        flags["pause"] = False
+        state["paused"] = False
         say("")
+    if flags["play"]:
+        flags["play"] = False
+        if state["stopped"]:     # back to watching; anything that came in while stopped is skipped
+            state["stopped"] = False
+            state["seen"].update(bot_replies())
+            state["prev_cur"] = list(bot_replies())
     if flags["back"]:
         flags["back"] = False
         h = state["history"]
@@ -497,7 +524,7 @@ def tick():
         else:
             resume_audio()      # carry on from that spot, then keep watching
             state["seen"].update(bot_replies())   # skip what came in while paused
-    if not state["paused"] and time.time() >= state["next"]:
+    if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
             cur = bot_replies()
@@ -534,10 +561,12 @@ def tick():
         except Exception:
             pass
     speaking = is_speaking()
-    if state["queue"] and not speaking and not state["paused"]:
+    if state["queue"] and not speaking and not state["paused"] and not state["stopped"]:
         say(announce(state["queue"].pop(0)))
         speaking = True
-    if state["paused"]:
+    if state["stopped"] and not speaking:
+        new = "Stopped"
+    elif state["paused"]:
         new = "Paused"
     else:
         new = "Reading" if speaking else "Watching"
