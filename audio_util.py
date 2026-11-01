@@ -1,6 +1,4 @@
-# Shared WAV helpers for Piper pitch, the xAI speech response, and the command chime.
-import math
-import struct
+# Shared WAV helpers for Piper pitch and the xAI speech response.
 import wave
 
 
@@ -37,19 +35,3 @@ def scale_wav_rate(path, ratio):
         handle.writeframes(frames)
     seconds = params.nframes / float(rate)
     return shifted, frames, seconds
-
-
-def write_chime(path, freqs, ms=90, rate=16000):
-    """A short tone played when a voice command is accepted."""
-    frames = bytearray()
-    for freq in freqs:
-        count = int(rate * ms / 1000)
-        for i in range(count):
-            fade = min(1.0, i / max(1, rate * 0.01), (count - i) / max(1, rate * 0.02))
-            sample = int(fade * 0.35 * 32767 * math.sin(2 * math.pi * freq * i / rate))
-            frames += struct.pack("<h", max(-32767, min(32767, sample)))
-    with wave.open(path, "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(rate)
-        handle.writeframes(frames)

@@ -26,8 +26,6 @@ APT_PACKAGES=(
   build-essential
   pkg-config
   libffi-dev
-  portaudio19-dev
-  libportaudio2
   espeak-ng
   pulseaudio-utils
   gnome-keyring
@@ -160,10 +158,6 @@ deps_ready() {
   fi
   if ! command -v gio >/dev/null 2>&1; then
     say "  - libglib2.0-bin (gio)"
-    missing=1
-  fi
-  if ! lib_present "libportaudio.so.2"; then
-    say "  - libportaudio2 and portaudio19-dev"
     missing=1
   fi
   if ! lib_present "libsecret-1.so.0"; then

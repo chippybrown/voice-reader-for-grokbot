@@ -36,10 +36,6 @@ def chief_path():
     return os.path.join(config_dir(), "chief-of-staff.txt")
 
 
-def wake_name_path():
-    return os.path.join(config_dir(), "wake-name.txt")
-
-
 def log_path():
     cache = os.environ.get("XDG_CACHE_HOME", "").strip() or os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(cache, "grokbot-voice", "log.txt")
@@ -315,14 +311,6 @@ def install_hotkeys(flags):
         _hotkeys = hotkeys
     except Exception as exc:
         _log_hotkey(exc)
-
-
-def play_chime(path):
-    """A second player, so the confirm tone does not cut off a reply."""
-    command = _player_command(path)
-    if not command:
-        return
-    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _log_hotkey(exc):

@@ -35,10 +35,6 @@ def chief_path():
     return os.path.join(config_dir(), "chief of staff.txt")
 
 
-def wake_name_path():
-    return os.path.join(config_dir(), "wake-name.txt")
-
-
 def log_path():
     return os.path.join(os.environ.get("TEMP", "."), "grokbot_voice_log.txt")
 
@@ -315,10 +311,4 @@ def install_hotkeys(flags):
     keyboard.add_hotkey("ctrl+alt+s", lambda: flags.update(stop=True))
     keyboard.add_hotkey("ctrl+alt+p", lambda: flags.update(pause=not flags["pause"]))
     keyboard.add_hotkey("ctrl+alt+q", lambda: flags.update(quit=True))
-
-
-def play_chime(path):
-    """Play beside any current reply. SND_NOSTOP refuses to cut off speech."""
-    import winsound
-    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NOSTOP)
 

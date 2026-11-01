@@ -112,19 +112,6 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_primary_bot_then_the_open_chat(self):
-        root = tempfile.mkdtemp()
-        try:
-            store = os.path.join(root, "sand-client-persistence")
-            _blob(store, "sand.client.slice.account.a.roster.last-roster",
-                  '{"schemaVersion":1,"value":{"rows":[{"id":"a","name":"Larry","primary":true},{"id":"b","name":"Amy"}]}}')
-            _blob(store, "sand.client.slice.account.a.transcript.replicas.b",
-                  '{"schemaVersion":1,"value":{"entries":[{"kind":"send-message","id":"m","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"hi"}}]}}')
-            self.assertEqual(grok_store.primary_bot_name(store), "Larry")
-            self.assertEqual(grok_store.active_bot_name(store), "Amy")
-        finally:
-            shutil.rmtree(root)
-
     def test_chief_voice_regex_still_matches(self):
         root = tempfile.mkdtemp()
         try:
