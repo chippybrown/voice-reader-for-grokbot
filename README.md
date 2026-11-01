@@ -18,7 +18,7 @@ On Linux Mint, install the Grok Bot desktop app as well. Grokbot Voice reads tha
 
 1. On the [Releases](https://github.com/chippybrown/voice-reader-for-grokbot/releases) page, download `Grokbot Voice.exe` and put it on your desktop.
 2. Double-click it. Windows SmartScreen may warn you, because the app is not code-signed yet. Click **More info**, then **Run anyway**.
-3. The toolbar starts in the lower right of the screen. Opening it again raises the window that is already running instead of starting a second copy. Drag it anywhere you like. Drag an edge or a corner to make it wide and short, or tall and skinny. The buttons wrap, and stack in a column when the window is narrow. In Settings, **Toolbar** can be **Horizontal** or **Vertical**. Vertical stacks every button from top to bottom, which suits a screen edge or a portrait monitor. The size, the place, and that choice are remembered the next time you open it. It stays above your other windows.
+3. The toolbar starts in the lower right of the screen. Opening it again raises the window that is already running instead of starting a second copy. **Check for updates** in the gear menu compares this copy with the latest GitHub release. It says you're up to date, or that a newer version is available, and waits for **Update**. Once a day the bar can show **Update available**. It does not install by itself. Drag it anywhere you like. Drag an edge or a corner to make it wide and short, or tall and skinny. The buttons wrap, and stack in a column when the window is narrow. In Settings, **Toolbar** can be **Horizontal** or **Vertical**. Vertical stacks every button from top to bottom, which suits a screen edge or a portrait monitor. The size, the place, and that choice are remembered the next time you open it. It stays above your other windows.
 
 ## Voices
 
@@ -95,7 +95,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
@@ -207,7 +207,7 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
-  --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance \
+  --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh

@@ -21,9 +21,10 @@ import bot_prefs
 import grok_store
 import piper_setup
 import single_instance
+import updates
 import window_layout
 from audio_util import write_pcm_wav
-from version import APP_TITLE
+from version import APP_TITLE, VERSION
 
 # Claim the single-instance lock before hotkeys, settings, or the window.
 # A second start exits here, so it never speaks. The first window is raised.
@@ -404,6 +405,8 @@ dot = c.create_oval(248, 11, 258, 21, fill=ACCENT, outline="")
 stxt = c.create_text(264, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
 hold_status = {"text": ""}
+update_note = {"text": ""}
+update_state = {"result": None}
 LABELS = {"Stopped": "Not monitoring", "Paused": "Reading paused"}
 btn = {}   # name -> (circle, glyph)
 def base_fill(name):
@@ -416,13 +419,13 @@ def base_fill(name):
 def show_status(*_):
     value = status.get()
     c.itemconfig(stxt, text=LABELS.get(value, value), fill=DIM)
-    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942", "Stopped": RED}.get(value, DIM))
+    c.itemconfig(dot, fill={"Watching": ACCENT, "Reading": "#5aa9ff", "Paused": "#f5b942", "Stopped": RED, "Update available": ACCENT}.get(value, DIM))
     for name, (circle, glyph) in btn.items():
         c.itemconfig(circle, fill=base_fill(name))
     if "pause" in btn:
         c.itemconfig(btn["pause"][1], fill="#1f2430" if value == "Paused" else FG)
     if "play" in btn:   # green only while monitoring
-        c.itemconfig(btn["play"][1], fill=ACCENT if value in ("Watching", "Reading") else DIM)
+        c.itemconfig(btn["play"][1], fill=ACCENT if value in ("Watching", "Reading", "Update available") else DIM)
 status.trace_add("write", show_status)
 
 # drag the background to move; drag an edge or corner to resize
@@ -703,8 +706,88 @@ def open_tuner():
             sc.pack(side="left")
     tk.Label(win, text="Unchecked bots are not read aloud. Back, Next, and Play still speak them.",
              bg=BG, fg=DIM, font=("Segoe UI", 8), wraplength=420, justify="left").grid(row=9, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 0))
+    update_row = tk.Frame(win, bg=BG)
+    update_row.grid(row=10, column=0, columnspan=2, sticky="w", padx=10, pady=(4, 0))
+    update_line = tk.Label(update_row, text="", bg=BG, fg=DIM, font=("Segoe UI", 8))
+    update_go = tk.Button(update_row, text="Update", bg=ACCENT, fg="white", activebackground="#3a4256", activeforeground=FG,
+                          relief="flat", bd=0, padx=8, pady=2, font=("Segoe UI", 8))
+    update_busy = {"on": False}
+
+    def paint_update(result):
+        update_busy["on"] = False
+        update_state["result"] = result
+        try:
+            if not update_line.winfo_exists():
+                return
+        except Exception:
+            return
+        update_line.configure(text=result.get("message") or "")
+        if result.get("available"):
+            update_note["text"] = "Update available"
+            if not update_go.winfo_ismapped():
+                update_go.pack(side="left", padx=(8, 0))
+        else:
+            if result.get("ok"):
+                update_note["text"] = ""
+            update_go.pack_forget()
+
+    def check_updates():
+        if update_busy["on"]:
+            return
+        update_busy["on"] = True
+        update_line.configure(text="Checking...")
+        update_go.pack_forget()
+
+        def work():
+            try:
+                result = updates.check(VERSION, urllib.request.urlopen)
+                updates.write_state(os.path.join(platform.config_dir(), "update-check.json"), time.time(), result)
+            except Exception as exc:
+                log("update check: %r" % (exc,))
+                result = {"ok": False, "available": False, "message": "Could not check for updates."}
+            root.after(0, lambda result=result: paint_update(result))
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def install_update():
+        result = update_state.get("result") or {}
+        if update_busy["on"] or not result.get("available"):
+            return
+        update_busy["on"] = True
+        update_line.configure(text="Downloading update...")
+        update_go.configure(state="disabled")
+
+        def work():
+            try:
+                updates.apply(
+                    result, sys.platform, os.getpid(), sys.executable, bool(getattr(sys, "frozen", False)),
+                    platform.config_dir(), urllib.request.urlopen, platform.log_path())
+            except Exception as exc:
+                log("update install: %r" % (exc,))
+                def failed():
+                    update_busy["on"] = False
+                    try:
+                        update_line.configure(text="Update did not finish.")
+                        update_go.configure(state="normal")
+                    except Exception:
+                        pass
+                root.after(0, failed)
+                return
+            # The helper waits for this process to leave, then swaps or reinstalls.
+            root.after(0, lambda: flags.update(quit=True))
+
+        threading.Thread(target=work, name="update-install", daemon=True).start()
+
+    update_go.configure(command=install_update)
+    tk.Button(update_row, text="Check for updates", command=check_updates, bg=PANEL, fg=FG,
+              activebackground="#3a4256", activeforeground=FG, relief="flat", bd=0, padx=8, pady=2,
+              font=("Segoe UI", 8)).pack(side="left")
+    update_line.pack(side="left", padx=(8, 0))
+    remembered = update_state.get("result")
+    if remembered:
+        paint_update(remembered)
     bar2 = tk.Frame(win, bg=BG)
-    bar2.grid(row=10, column=0, columnspan=2, pady=(6, 8))
+    bar2.grid(row=11, column=0, columnspan=2, pady=(6, 8))
     def reset():
         tune_all[default_label] = {"speed": 1.0, "pitch": 0}
         save_tune()
@@ -945,11 +1028,44 @@ def tick():
     else:
         new = "Reading" if speaking else "Watching"
     if hold_status["text"]:
-        if status.get() != hold_status["text"]:
-            status.set(hold_status["text"])
-    elif status.get() != new:
-        status.set(new)
+        shown = hold_status["text"]
+    elif new == "Watching" and update_note["text"]:
+        shown = update_note["text"]
+    else:
+        shown = new
+    if status.get() != shown:
+        status.set(shown)
     root.after(200, tick)
+
+def quiet_update_check():
+    """Ask GitHub at most once a day. A newer release is only a note, never an install."""
+    path = os.path.join(platform.config_dir(), "update-check.json")
+    now = time.time()
+    action, note = updates.launch_note(VERSION, updates.read_state(path), now)
+    if action == "skip":
+        if note:
+            root.after(0, lambda: update_note.update(text=note))
+        return
+    result = None
+    try:
+        result = updates.check(VERSION, urllib.request.urlopen)
+    except Exception as exc:
+        log("update check: %r" % (exc,))
+    try:
+        if not (result and result.get("ok")):
+            previous = updates.read_state(path)
+            result = {"latest": previous["latest"], "available": previous["available"]}
+        updates.write_state(path, now, result)
+    except Exception:
+        pass
+
+    def show(result=result):
+        if result and result.get("ok"):
+            update_state["result"] = result
+            update_note["text"] = "Update available" if result.get("available") else ""
+        elif result and result.get("available") and updates.newer(VERSION, result.get("latest")):
+            update_note["text"] = "Update available"
+    root.after(0, show)
 
 if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.update_idletasks()
@@ -957,5 +1073,6 @@ if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.destroy()
 else:
     threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
+    threading.Thread(target=quiet_update_check, name="update-check", daemon=True).start()
     root.after(200, tick)
     root.mainloop()
