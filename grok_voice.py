@@ -18,7 +18,8 @@ else:
     import platform_linux as platform
 
 import grok_store
-from audio_util import write_pcm_wav
+import wake_cmd
+from audio_util import write_chime, write_pcm_wav
 
 SAVED = platform.saved_voice_path()
 TUNE_FILE = platform.tune_path()
@@ -31,6 +32,27 @@ def chief_name():
         return open(platform.chief_path(), encoding="utf-8").read().strip() or "Moya"
     except Exception:
         return "Moya"
+
+def _read_setting(path):
+    try:
+        return open(path, encoding="utf-8").read().strip()
+    except Exception:
+        return ""
+
+def wake_name():
+    """Override, then chief of staff, then the roster's primary bot, then the open chat."""
+    directory = platform.persistence_dir()
+    return wake_cmd.resolve_wake_name(
+        _read_setting(platform.wake_name_path()),
+        _read_setting(platform.chief_path()),
+        grok_store.primary_bot_name(directory),
+        grok_store.active_bot_name(directory),
+    )
+
+def save_wake_name(name):
+    path = platform.wake_name_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write(name.strip())
 
 _chief = chief_name()
 _cv, _cspeed = grok_store.chief_voice(platform.persistence_dir(), _chief)
@@ -382,6 +404,32 @@ def open_tuner():
         sc.configure(command=changed)
     slider(1, "Speed", 0.5, 2.0, 0.1, settings["speed"], "speed")
     slider(2, "Pitch", -10, 10, 1, settings["pitch"], "pitch")
+    tk.Label(win, text="Wake name", bg=BG, fg=DIM, font=("Segoe UI", 9), width=10, anchor="w").grid(row=3, column=0, padx=(10, 0))
+    wake_entry = tk.Entry(win, bg="#11151c", fg=FG, insertbackground=FG, relief="flat", font=("Segoe UI", 9), width=22)
+    wake_entry.insert(0, wake_name())
+    wake_entry.grid(row=3, column=1, padx=(0, 10), sticky="w")
+    cmd_var = tk.BooleanVar(value=commands_enabled())
+    def command_label():
+        name = wake_entry.get().strip() or wake_name() or "your bot"
+        return "Voice commands (%s speak / %s quiet)" % (name, name)
+    def on_commands():
+        enabled = bool(cmd_var.get())
+        save_commands_enabled(enabled)
+        if enabled:
+            start_voice_commands()
+        else:
+            stop_voice_commands()
+    cmd_btn = tk.Checkbutton(win, text=command_label(), variable=cmd_var, command=on_commands,
+                   bg=BG, fg=FG, selectcolor=PANEL, activebackground=BG, activeforeground=FG,
+                   font=("Segoe UI", 9), anchor="w")
+    def save_wake(_event=None):
+        save_wake_name(wake_entry.get())
+        cmd_btn.configure(text=command_label())
+        if commands_enabled():
+            start_voice_commands()
+    wake_entry.bind("<Return>", save_wake)
+    wake_entry.bind("<FocusOut>", save_wake)
+    cmd_btn.grid(row=6, column=0, columnspan=2, sticky="w", padx=10, pady=(2, 0))
     bar2 = tk.Frame(win, bg=BG)
     bar2.grid(row=5, column=0, columnspan=2, pady=(6, 8))
     def reset():
@@ -447,8 +495,61 @@ for _keyset in _keys:
 state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
          "file_key": _active, "prev_cur": list(_lines)}
 
+def commands_path():
+    return os.path.join(platform.config_dir(), "voice-commands.json")
+
+def commands_enabled():
+    try:
+        return bool(json.load(open(commands_path(), encoding="utf-8")).get("enabled", True))
+    except Exception:
+        return True
+
+def save_commands_enabled(on):
+    os.makedirs(platform.config_dir(), exist_ok=True)
+    json.dump({"enabled": bool(on)}, open(commands_path(), "w", encoding="utf-8"))
+
+def ensure_chime():
+    path = platform.wav_path("chime")
+    if not os.path.isfile(path):
+        write_chime(path, [660])
+    return path
+
+listener_box = {"obj": None}
+
+def on_voice_command(action):
+    def apply():
+        if action == "quiet":
+            flags.update(stop=True)
+        elif action == "speak":
+            flags.update(pause=False, play=True)
+        else:
+            return
+        try:
+            platform.play_chime(ensure_chime())
+        except Exception as exc:
+            log("chime problem: %r" % (exc,))
+    root.after(0, apply)
+
+def start_voice_commands():
+    if listener_box.get("obj"):
+        listener_box["obj"].start()
+        return
+    try:
+        from voice_listener import VoiceListener
+    except Exception as exc:
+        log("voice commands unavailable: %r" % (exc,))
+        return
+    listener_box["obj"] = VoiceListener(platform.config_dir(), on_voice_command, is_speaking, log, wake_name)
+    listener_box["obj"].start()
+
+def stop_voice_commands():
+    obj = listener_box.get("obj")
+    if obj:
+        obj.stop()
+
 def tick():
     if flags["quit"]:
+        stop_voice_commands()
         say("")
         root.destroy()
         return
@@ -566,5 +667,7 @@ if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.update()
     root.destroy()
 else:
+    if commands_enabled():
+        start_voice_commands()
     root.after(200, tick)
     root.mainloop()

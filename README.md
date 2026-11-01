@@ -61,7 +61,7 @@ The buttons stay quiet. Only **Test** in Settings speaks. Everything else just d
 - **Pause** holds in the middle of the reply and remembers the spot. The Pause button turns amber, and the status says **Reading paused**.
 - **Play** is the green button. After Stop, it starts monitoring again. Replies that arrived while monitoring was off are skipped. After Pause, Play continues from the spot where reading held.
 - **Next** steps forward through earlier replies. On the newest reply, Next stops and waits for the next new one.
-- **Gear** opens Settings. Choose a voice, then set its speed and pitch. Each voice remembers its own settings. The Grok voice uses the speed (xAI keeps it in a comfortable range). Pitch applies to Windows and Piper voices. **Test** plays a short sample, **Reset** puts that voice back to normal, and **Done** closes the panel. Open the voice list there and choose **Set xAI API key...** when you want the Grok voice.
+- **Gear** opens Settings. Choose a voice, then set its speed and pitch. Each voice remembers its own settings. The Grok voice uses the speed (xAI keeps it in a comfortable range). Pitch applies to Windows and Piper voices. **Wake name** is the word voice commands start with. **Test** plays a short sample, **Reset** puts that voice back to normal, and **Done** closes the panel. Open the voice list there and choose **Set xAI API key...** when you want the Grok voice.
 - **Status light** is green for Watching, blue for Reading, amber for Reading paused, and red for Not monitoring.
 - **Turn off** is the red button in the top right. It closes Grokbot Voice.
 
@@ -77,6 +77,19 @@ These work from any window:
 
 On Linux these shortcuts use the normal keyboard and do not need an administrator password. Linux Mint Cinnamon uses X11, where they work. On a Wayland session they usually do not, and the on-screen buttons still do.
 
+## Voice commands
+
+Voice commands are on unless you turn them off in the gear menu. Grokbot Voice uses the microphone for two phrases that start with your bot's name. It does not change Grok Bot's microphone.
+
+The name is your chief of staff if that file is set, otherwise the primary bot on your roster, otherwise whoever is in the open chat. Open the gear and edit **Wake name** to use a different word. If your chief of staff is Larry:
+
+- Say **Larry speak**. That is the same as the green Play button. Monitoring starts again, or a paused reply continues. A short chime confirms it.
+- Say **Larry quiet**. That is the same as Stop. The reply ends, monitoring ends, Stop turns red, and the status says **Not monitoring**. This phrase is accepted while a reply is being read, when the name is heard exactly. **Larry speak** is ignored during a reply, so the voice that is playing cannot start another one.
+
+If both phrases are in one breath, the last one wins. Extra noise around them is ignored.
+
+The first time you use this, Grokbot Voice downloads a small offline English speech model (about 40 MB) into its settings folder. After that, the phrases are recognized on this computer. If the model does not know your bot's name, it still hears a close-sounding name, and the log suggests picking a simpler wake name. Turn it off from the gear menu with **Voice commands (Larry speak / Larry quiet)**, using your own name in place of Larry.
+
 ## Where settings are saved
 
 Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Roaming`):
@@ -86,8 +99,9 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 - `%APPDATA%\Grok Voice\piper` is where Piper voice files go
 - `%APPDATA%\Grok Voice\xai key.bin` is your xAI API key, encrypted for your Windows account
 - `%APPDATA%\Grok Voice\chief of staff.txt` is optional. Put a bot's name on the first line if the chief of staff should be someone other than Moya
+- `%APPDATA%\Grok Voice\wake-name.txt` is optional. Put the voice-command name here if it should differ from the chief of staff
 
-On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
+On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, Piper models, the optional chief-of-staff name, and the optional wake name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
 
 ## Build from source
 
@@ -95,7 +109,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --collect-all vosk --collect-all sounddevice --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import wake_cmd --hidden-import voice_listener grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
@@ -128,7 +142,7 @@ bash ~/.local/share/grokbot-voice/install-mint.sh --uninstall
 
 That removes the program, the menu entry, and the desktop icon. Your settings, Piper voices, and xAI key stay.
 
-Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it.
+Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it. The same panel has **Wake name**. If your bot is Larry, say **Larry speak** to do what Play does, and **Larry quiet** to do what Stop does.
 
 Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
 
@@ -144,12 +158,13 @@ Open a terminal and paste:
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk python3-pip espeak-ng pulseaudio-utils gnome-keyring libsecret-1-0
+sudo apt install python3 python3-tk python3-pip espeak-ng pulseaudio-utils libportaudio2 gnome-keyring libsecret-1-0
 ```
 
 - `python3-tk` draws the little toolbar.
 - `espeak-ng` is the built-in voice, the stand-in for the Windows voices.
 - `pulseaudio-utils` provides `paplay`, which plays the sound. If you are on PipeWire and `paplay` is missing, install the package that provides `pw-play` (often `pipewire-bin` or `pipewire`).
+- `libportaudio2` lets voice commands hear **Larry speak** and **Larry quiet**.
 - `gnome-keyring` and `libsecret` store the xAI key. Linux Mint Cinnamon starts the keyring when you log in.
 
 ### 2. Run Grokbot Voice
@@ -207,7 +222,9 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
+  --hidden-import wake_cmd --hidden-import voice_listener \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
+  --collect-all vosk --collect-all sounddevice \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh
 packaging/linux/build-appimage.sh
