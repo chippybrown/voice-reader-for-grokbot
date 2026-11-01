@@ -4,3 +4,5 @@ comtypes
 piper-tts
 onnxruntime
 pyinstaller
+keyring
+pynput

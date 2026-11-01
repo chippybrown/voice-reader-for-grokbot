@@ -5,12 +5,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-windows:
+    if: github.event_name != 'pull_request'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -25,7 +27,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Build Grokbot Voice
-        run: pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream grok_voice.py
+        run: pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
 
       - name: Attach the executable to the GitHub Release
         uses: softprops/action-gh-release@v2
@@ -33,3 +35,65 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/Grokbot Voice.exe
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common ca-certificates wget file binutils libfuse2
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y python3.12 python3.12-venv python3.12-dev python3.12-tk
+
+      - name: Create a virtualenv and install Python packages
+        run: |
+          python3.12 -m venv /tmp/venv
+          /tmp/venv/bin/pip install --upgrade pip
+          /tmp/venv/bin/pip install -r requirements-linux.txt
+
+      - name: Test the Linux chat reader
+        run: /tmp/venv/bin/python -m unittest tests.test_grok_store -v
+
+      - name: Build the Linux binary
+        run: |
+          /tmp/venv/bin/pyinstaller --noconfirm --onefile --noconsole --name grokbot-voice \
+            --add-data "assets/icon.png:." \
+            --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
+            --collect-all keyring --collect-all secretstorage --collect-all pynput \
+            grok_voice.py
+          cp dist/grokbot-voice dist/grokbot-voice-linux-x86_64
+          chmod +x dist/grokbot-voice dist/grokbot-voice-linux-x86_64
+          file dist/grokbot-voice-linux-x86_64
+
+      - name: Download appimagetool
+        run: |
+          wget -q -O /tmp/appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x /tmp/appimagetool
+
+      - name: Build the AppImage
+        run: |
+          chmod +x packaging/linux/build-appimage.sh
+          APPIMAGETOOL=/tmp/appimagetool packaging/linux/build-appimage.sh
+          file dist/Grokbot-Voice-x86_64.AppImage
+
+      - name: Upload the Linux builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: grokbot-voice-linux
+          path: |
+            dist/grokbot-voice-linux-x86_64
+            dist/Grokbot-Voice-x86_64.AppImage
+
+      - name: Attach the Linux builds to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            dist/Grokbot-Voice-x86_64.AppImage
+            dist/grokbot-voice-linux-x86_64

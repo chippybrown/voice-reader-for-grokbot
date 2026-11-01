@@ -2,15 +2,17 @@
 
 Download [Grokbot Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases) from the Releases page, put it on your desktop, and double-click to run.
 
-A small Windows app for people who'd rather listen than read.
+A small app for people who'd rather listen than read. It runs on Windows and on Linux Mint.
 
-Grokbot Voice sits on your screen as a little always-on-top toolbar. It watches the Grok Bot desktop app, and when a bot writes a new reply, it reads that reply aloud. Bot names and timestamps are skipped, so you hear the reply itself. You can use that bot's own Grok voice, a natural offline Piper voice, or a built-in Windows voice.
+Grokbot Voice sits on your screen as a little always-on-top toolbar. It watches the Grok Bot desktop app, and when a bot writes a new reply, it reads that reply aloud. Bot names and timestamps are skipped, so you hear the reply itself. You can use that bot's own Grok voice, a natural offline Piper voice, or a built-in voice (Windows voices, or espeak-ng on Linux).
 
 ![The Grokbot Voice toolbar: Back, Stop, Pause, Play, Next, a green Watching light, and the gear and power buttons](docs/toolbar.png)
 
 ## What you need
 
-Grokbot Voice works with the Grok Bot desktop app on Windows.
+On Windows, Grokbot Voice works with the Grok Bot desktop app.
+
+On Linux Mint, install the Grok Bot desktop app as well. Grokbot Voice reads that app's saved chats. The Linux steps are in [Linux Mint](#linux-mint) below.
 
 ## Install
 
@@ -46,7 +48,7 @@ You only need this if you want the Grok voice. Windows and Piper voices work wit
 3. Open **API Keys**, create an API key, and copy it.
 4. In Grokbot Voice, open the gear, click the voice name, and choose **Set xAI API key...**. Paste the key and click **Save**.
 
-The key is saved encrypted for your Windows account only (Windows DPAPI). You do not have to paste it again.
+On Windows the key is saved encrypted for your Windows account only (Windows DPAPI). On Linux it is saved in your login keyring. You do not have to paste it again.
 
 If the key has no credits, or it hits its spending limit, Grokbot Voice quietly reads that reply with a free local voice instead. The same thing happens if you are offline or xAI reports any other error. It tries Jenny when that Piper voice is installed, then any other Piper voice you added. The next reply tries the Grok voice again. A Windows voice is there whenever you pick one in Settings.
 
@@ -73,6 +75,8 @@ These work from any window:
 - `Ctrl+Alt+P` pauses, or continues from the paused spot
 - `Ctrl+Alt+Q` quits
 
+On Linux these shortcuts use the normal keyboard and do not need an administrator password. Linux Mint Cinnamon uses X11, where they work. On a Wayland session they usually do not, and the on-screen buttons still do.
+
 ## Where settings are saved
 
 Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Roaming`):
@@ -83,18 +87,117 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 - `%APPDATA%\Grok Voice\xai key.bin` is your xAI API key, encrypted for your Windows account
 - `%APPDATA%\Grok Voice\chief of staff.txt` is optional. Put a bot's name on the first line if the chief of staff should be someone other than Moya
 
+On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
+
 ## Build from source
 
 On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
 
-Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release. You can also start the workflow by hand from the Actions tab.
+On Linux the matching build is in [Linux Mint](#linux-mint). A version tag also builds `Grokbot-Voice-x86_64.AppImage` and `grokbot-voice-linux-x86_64` on Ubuntu 22.04.
+
+Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attaches `Grokbot Voice.exe` to the release, plus the Linux files. You can also start the workflow by hand from the Actions tab.
+
+## Linux Mint
+
+Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
+
+```bash
+sudo apt install ./Grok_Bot_*.deb
+```
+
+Open Grok Bot once and sign in, so it can save chats on this computer. Grokbot Voice reads those saved chats. It does not read pixels off the screen.
+
+### 1. Install the packages Grokbot Voice needs
+
+Open a terminal and paste:
+
+```bash
+sudo apt update
+sudo apt install python3 python3-tk python3-pip espeak-ng pulseaudio-utils gnome-keyring libsecret-1-0
+```
+
+- `python3-tk` draws the little toolbar.
+- `espeak-ng` is the built-in voice, the stand-in for the Windows voices.
+- `pulseaudio-utils` provides `paplay`, which plays the sound. If you are on PipeWire and `paplay` is missing, install the package that provides `pw-play` (often `pipewire-bin` or `pipewire`).
+- `gnome-keyring` and `libsecret` store the xAI key. Linux Mint Cinnamon starts the keyring when you log in.
+
+### 2. Run Grokbot Voice
+
+On the [Releases](https://github.com/chippybrown/voice-reader-for-grokbot/releases) page, download **Grokbot-Voice-x86_64.AppImage**. It is attached when a version tag is built, the same way the Windows exe is. Then:
+
+```bash
+chmod +x Grokbot-Voice-x86_64.AppImage
+./Grokbot-Voice-x86_64.AppImage
+```
+
+The same toolbar appears. Drag it where you like. There is also a plain binary named `grokbot-voice-linux-x86_64` if you would rather not use an AppImage.
+
+To run from this source folder instead:
+
+```bash
+python3 -m pip install -r requirements-linux.txt
+python3 grok_voice.py
+```
+
+### 3. Optional: a Piper voice
+
+Piper sounds more natural than espeak-ng and stays on your computer. The Ubuntu package named `piper` is a different program (a game controller tool), so do not install that.
+
+1. Download the Linux x86_64 Piper release from <https://github.com/rhasspy/piper/releases> and unpack it.
+2. Download a voice from <https://huggingface.co/rhasspy/piper-voices>: both the `.onnx` file and the matching `.onnx.json` file. Jenny is an easy first voice (`en_GB-jenny_dioco-medium`).
+3. Put the `piper` program and the two voice files in:
+
+   `~/.config/grokbot-voice/piper`
+
+4. Restart Grokbot Voice. The voice shows up in the gear menu.
+
+You can point at a Piper program somewhere else with the `GROKBOT_PIPER` environment variable.
+
+### 4. The xAI key
+
+Use the same gear menu as on Windows: **Set xAI API key...**, paste the key from [console.x.ai](https://console.x.ai), and click **Save**. The key goes into your login keyring (Secret Service), not into a file. Speech is still billed on that xAI account. If the key is missing, out of credits, or xAI returns an error, Grokbot Voice uses Piper when you have it, and otherwise espeak-ng.
+
+### Where the chats are
+
+Grokbot Voice looks for Grok Bot's `sand-client-persistence` folder and follows the chat that was saved most recently (the one you have open while the bot is writing). It checks, in order:
+
+- `GROKBOT_CHAT_DIR`, if you set that variable
+- the folder named in `~/.config/grokbot-voice/chat-folder.txt`, if that file exists
+- `~/.config/Grok Bot/sand-client-persistence`
+- `~/.config/grok-bot/sand-client-persistence`
+- `~/.config/Grokbot/sand-client-persistence`
+- Flatpak folders under `~/.var/app`
+- Snap folders under `~/snap`
+
+A line in `chat-folder.txt` can be the `sand-client-persistence` folder itself, or the `Grok Bot` folder that contains it.
+
+### Keyboard shortcuts on Mint
+
+`Ctrl+Alt+S`, `Ctrl+Alt+P`, and `Ctrl+Alt+Q` work from any window on X11, which is what Linux Mint Cinnamon uses, and they do not ask for a password. On Wayland those global keys usually do nothing. The buttons on the toolbar still work.
+
+### Build a Linux binary yourself
+
+On Ubuntu 22.04 or Linux Mint 21 or newer, with the packages from step 1:
+
+```bash
+python3 -m pip install -r requirements-linux.txt
+python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
+  --add-data "assets/icon.png:." \
+  --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
+  --collect-all keyring --collect-all secretstorage --collect-all pynput \
+  grok_voice.py
+chmod +x packaging/linux/build-appimage.sh
+packaging/linux/build-appimage.sh
+```
+
+That writes `dist/grokbot-voice` and, when `appimagetool` is installed, `dist/Grokbot-Voice-x86_64.AppImage`. GitHub builds the same files on Ubuntu 22.04 so they run on Mint.
 
 ## License
 
