@@ -121,6 +121,20 @@ Pushing a version tag such as `v1.2.0` runs that same build on GitHub and attach
 
 ## Linux Mint
 
+The short way is one command. Paste it in a terminal. It installs the packages, the app, and a menu entry. Run it again any time to update. It asks before turning on start-at-login, and the answer is No if there is no terminal.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash
+```
+
+To remove the app later, download is not required if you already have the file. From the installed copy:
+
+```bash
+bash ~/.local/share/grokbot-voice/install-mint.sh --uninstall
+```
+
+That removes the program and the menu entry. Your settings and xAI key stay.
+
 Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
 
 ```bash
