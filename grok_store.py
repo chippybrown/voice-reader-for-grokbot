@@ -263,43 +263,115 @@ def _text_content(value):
 
 def _is_outbound(entry):
     """Messages the bot sent to another agent, not to the person."""
+    if not isinstance(entry, dict):
+        return False
     if entry.get("toAgent"):
         return True
     entry_id = entry.get("id")
     return isinstance(entry_id, str) and entry_id.startswith("agent-outbound")
 
 
-def _entry_text(entry):
-    """Spoken text of one transcript entry, or '' if it is not a reply to the user.
+def _marked_hidden(entry):
+    """True when the app stored this object as not drawn in the chat."""
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("hidden") in (True, "true", 1) or entry.get("internal") in (True, "true", 1):
+        return True
+    if entry.get("visible") in (False, "false", 0) or entry.get("rendered") in (False, "false", 0):
+        return True
+    visibility = str(entry.get("visibility") or entry.get("display") or "").lower()
+    return visibility in ("hidden", "internal", "system", "none")
 
-    User-facing replies are send-message entries whose message type is text,
-    and assistant messages that are not addressed to another agent.
+
+_FENCE = re.compile(r"```[^\n]*\n(.*?)```|~~~[^\n]*\n(.*?)~~~", re.S)
+_MD_LINK = re.compile(r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)|\[([^\]]+)\]\[[^\]]+\]")
+_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
+
+
+def render_speech(text):
+    """The words a person would read on screen, without markdown chrome.
+
+    Links are the label only. Code fences become the words 'code block'.
+    Bullets are plain items. Emphasis marks are dropped.
     """
-    if _is_outbound(entry):
+    if not text:
         return ""
-    kind = entry.get("kind")
-    if kind == "send-message":
-        message = entry.get("message")
-        if not isinstance(message, dict) or message.get("type") != "text":
-            return ""
-        return _text_content(message)
-    if kind == "message" and entry.get("role") == "assistant":
-        return _text_content(entry.get("content"))
-    return ""
+
+    def fence(match):
+        body = match.group(1) if match.group(1) is not None else match.group(2)
+        if body and body.strip():
+            return "\ncode block\n"
+        return "\n"
+
+    def link(match):
+        return next(group for group in match.groups() if group)
+
+    text = _FENCE.sub(fence, text)
+    text = _MD_LINK.sub(link, text)
+    text = _AUTOLINK.sub("", text)
+    pieces = []
+    for raw in text.splitlines():
+        line = re.sub(r"^\s{0,3}#{1,6}\s+", "", raw)
+        line = re.sub(r"^\s{0,3}>\s?", "", line)
+        line = re.sub(r"^\s*([-*+]|\d+[.)])\s+", "", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        line = re.sub(r"__([^_]+)__", r"\1", line)
+        line = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", line)
+        line = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", line)
+        line = re.sub(r"~~([^~]+)~~", r"\1", line)
+        line = re.sub(r"`([^`]+)`", r"\1", line)
+        line = line.replace("**", "").replace("`", "")
+        line = " ".join(line.split())
+        if line:
+            pieces.append(line)
+    return ". ".join(pieces)
+
+
+def _entry_text(entry):
+    """Spoken text of one transcript entry, or '' if the chat does not show it.
+
+    The only allowed shape is a send-message whose message type is text and
+    that is not marked hidden. Tool calls, reasoning, status, todos, widgets,
+    system turns, and notes to other agents are not that shape.
+    """
+    if not isinstance(entry, dict) or entry.get("kind") != "send-message":
+        return ""
+    message = entry.get("message")
+    if not isinstance(message, dict) or message.get("type") != "text":
+        return ""
+    if entry.get("role") == "system" or message.get("role") == "system":
+        return ""
+    if _is_outbound(entry) or _is_outbound(message):
+        return ""
+    if _marked_hidden(entry) or _marked_hidden(message):
+        return ""
+    return render_speech(_text_content(message))
+
+
+def _message_ids(entry):
+    """Every id the app may keep for this bubble, including after a rewrite."""
+    found = []
+    if not isinstance(entry, dict):
+        return found
+    message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+    for source in (entry, message):
+        for field in ("id", "messageId", "clientId", "clientMessageId"):
+            value = source.get(field)
+            if isinstance(value, str) and value.strip() and value.strip() not in found:
+                found.append(value.strip())
+    return found
 
 
 def entry_keys(entry, bot, text):
-    """Stable ids for one reply. Position and seq are not included.
+    """Stable ids for one reply. Position, seq, and timestamp are not included.
 
-    A rewritten or compacted slice keeps the same message id, or the same
-    bot, kind, timestamp, and text. Either one is enough to recognize it.
+    The message id is remembered for the whole session, so a chat switch or a
+    rewritten file cannot speak it again. The same on-screen words also match
+    when a rewrite assigns a new id but the text is unchanged.
     """
-    keys = []
-    entry_id = entry.get("id")
-    if isinstance(entry_id, str) and entry_id.strip():
-        keys.append("id:" + entry_id.strip())
-    stamp = entry.get("timestampMs")
-    raw = "%s\n%s\n%s\n%s" % (bot, entry.get("kind") or "", "" if stamp is None else stamp, text)
+    keys = ["id:" + value for value in _message_ids(entry)]
+    rendered = " ".join((text or "").split())
+    raw = "%s\n%s" % (bot, rendered)
     keys.append("h:" + hashlib.sha256(raw.encode("utf-8")).hexdigest())
     return keys
 

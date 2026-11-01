@@ -298,7 +298,7 @@ def announce(reply):
     match = re.search(TIME_RE.pattern + r"\s*$", text)   # time at the end
     if match:
         text = text[:match.start()].strip()
-    return text
+    return grok_store.render_speech(text)
 
 _logged_store = False
 def chat_snapshot():
@@ -705,13 +705,17 @@ def tick():
                     or (not known and (prev or len(cur) > 1)))
                 if switched:
                     # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
+                    bottom = cur[-1]
+                    already = bottom in seen or any(key in seen for key in (keys[-1] if keys else []))
                     seen.update(cur)
+                    for keyset in keys:
+                        seen.update(keyset)
                     state["history"] = list(cur)
                     state["queue"].clear()
-                    # read only the bottom reply of the new chat; Back steps up from there
+                    # A message already spoken this session stays quiet. Back steps up from here.
                     state["pos"] = len(cur) - 1
-                    if bot_prefs.allows_auto(bot_state, bot_of(cur[-1])):
-                        say(announce(cur[-1]), bot=bot_of(cur[-1]))
+                    if not already and bot_prefs.allows_auto(bot_state, bot_of(bottom)):
+                        say(announce(bottom), bot=bot_of(bottom))
                 else:
                     last_known = known[-1] if known else -1
                     for i, reply in enumerate(cur):

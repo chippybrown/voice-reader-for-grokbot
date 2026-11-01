@@ -38,11 +38,11 @@ class StoreTests(unittest.TestCase):
                   ']}}')
             lines, names = grok_store.reply_lines(store)
             self.assertIn("Moya", names)
-            self.assertEqual(len(lines), 2)
+            self.assertEqual(len(lines), 1)
             self.assertTrue(lines[0].startswith("Moya "))
             self.assertIn("#2 ", lines[0])
             self.assertIn("Here is the answer.", lines[0])
-            self.assertIn("And another line.", lines[1])
+            self.assertNotIn("And another line.", " ".join(lines))
             self.assertNotIn("please look", " ".join(lines))
             self.assertNotIn("do not read", " ".join(lines))
         finally:
@@ -61,8 +61,107 @@ class StoreTests(unittest.TestCase):
             lines, _names = grok_store.reply_lines(store)
             spoken = " ".join(lines)
             self.assertIn("Here is what I found.", spoken)
-            self.assertIn("a private aside", spoken)
+            self.assertNotIn("a private aside", spoken)
             self.assertNotIn("ask the other agent", spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_only_visible_chat_text_is_read(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.agent-123",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","seq":1,"timestampMs":1,"content":"user typed this"},'
+                  '{"kind":"message","role":"assistant","seq":2,"timestampMs":2,"content":"reasoning that is not on screen"},'
+                  '{"kind":"message","role":"system","seq":3,"timestampMs":3,"content":"system turn"},'
+                  '{"kind":"message","role":"assistant","id":"tool-1","seq":4,"timestampMs":4,"content":"tool result payload"},'
+                  '{"kind":"event","seq":5,"timestampMs":5,"event":{"type":"status","text":"still working"}},'
+                  '{"kind":"send-message","seq":6,"timestampMs":6,"message":{"type":"widget","content":"a button"}},'
+                  '{"kind":"send-message","seq":7,"timestampMs":7,"message":{"type":"todo","content":"finish the list"}},'
+                  '{"kind":"send-message","seq":8,"timestampMs":8,"message":{"type":"tool","content":"ran a command"}},'
+                  '{"kind":"send-message","id":"hid","hidden":true,"seq":9,"timestampMs":9,"message":{"type":"text","content":"hidden bubble"}},'
+                  '{"kind":"send-message","id":"agent-outbound-4","toAgent":{"id":"other"},"seq":10,"timestampMs":10,"message":{"type":"text","content":"note to another agent"}},'
+                  '{"kind":"send-message","id":"shown","seq":11,"timestampMs":11,"message":{"type":"text","content":"See [the docs](https://example.com/secret)."}}'
+                  ']}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertEqual(len(lines), 1)
+            self.assertIn("See the docs.", spoken)
+            self.assertNotIn("example.com", spoken)
+            for hidden in (
+                "user typed", "reasoning", "system turn", "tool result", "still working",
+                "a button", "finish the list", "ran a command", "hidden bubble", "note to another agent",
+            ):
+                self.assertNotIn(hidden, spoken)
+        finally:
+            shutil.rmtree(root)
+
+    def test_speech_matches_the_screen(self):
+        self.assertEqual(grok_store.render_speech("See [the docs](https://example.com/path)."), "See the docs.")
+        self.assertNotIn("example.com", grok_store.render_speech("[label](https://example.com/path)"))
+        self.assertEqual(grok_store.render_speech("**bold** and *italic* and `code`"), "bold and italic and code")
+        self.assertEqual(grok_store.render_speech("- one\n- two"), "one. two")
+        spoken = grok_store.render_speech("Before\n```python\nprint(1)\n```\nAfter")
+        self.assertIn("code block", spoken)
+        self.assertNotIn("print", spoken)
+        self.assertIn("Before", spoken)
+        self.assertIn("After", spoken)
+
+    def test_message_id_survives_rewrite_and_chat_switch(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            larry_key = "sand.client.slice.account.a.transcript.replicas.larry"
+            amy_key = "sand.client.slice.account.a.transcript.replicas.amy"
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u1","seq":1,"timestampMs":1000,"content":"hi"},'
+                  '{"kind":"send-message","id":"same-1","seq":2,"timestampMs":1100,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            _blob(store, amy_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u2","seq":1,"timestampMs":500,"content":"amy hi"},'
+                  '{"kind":"send-message","id":"amy-1","seq":2,"timestampMs":600,"message":{"type":"text","content":"Amy was quiet."}}'
+                  ']}}')
+            lines, _names, keylists, active = grok_store.reply_snapshot(store)
+            self.assertIn("Spoken once.", " ".join(lines))
+            self.assertNotIn("Amy was quiet.", " ".join(lines))
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            # Eight minutes later the same bubble is rewritten with a new time and seq.
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u1","seq":1,"timestampMs":1000,"content":"hi"},'
+                  '{"kind":"send-message","id":"same-1","seq":40,"timestampMs":999999,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, active2 = grok_store.reply_snapshot(store)
+            self.assertEqual(active, active2)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Switch to Amy, then back. Larry's id is still known.
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy","selected":true}]}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            fresh = grok_store.unseen_lines(seen, lines, keylists)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("Amy was quiet.", fresh[0])
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"same-1","seq":41,"timestampMs":1000001,"message":{"id":"same-1","type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # A new id with the same on-screen words is still the same reply.
+            _blob(store, larry_key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"brand-new","seq":42,"timestampMs":1000002,"message":{"type":"text","content":"Spoken once."}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
         finally:
             shutil.rmtree(root)
 
