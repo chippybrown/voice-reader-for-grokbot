@@ -19,6 +19,7 @@ else:
 
 import bot_prefs
 import grok_store
+import window_layout
 from audio_util import write_pcm_wav
 from version import APP_TITLE
 
@@ -337,7 +338,6 @@ platform.install_hotkeys(flags)
 platform.hide_console()
 
 BG, PANEL, FG, DIM, ACCENT, RED, KEY = "#1f2430", "#2a3040", "#e8ecf4", "#8a93a6", "#4cc38a", "#ff6b6b", "#ff00fe"
-W, H = 460, 74
 root = tk.Tk()
 root.title(APP_TITLE)
 platform.apply_icon(root)
@@ -353,17 +353,31 @@ except tk.TclError:
 root.configure(bg=_bar_bg)
 sw = root.winfo_screenwidth()
 sh = root.winfo_screenheight()
-root.geometry(f"{W}x{H}+{int(sw - W - sw * 0.10)}+{int(sh - H - sh * 0.05)}")
+
+def window_file():
+    return os.path.join(platform.config_dir(), "window.json")
+
+def saved_window():
+    try:
+        data = json.load(open(window_file(), encoding="utf-8"))
+        w, h = window_layout.clamp_size(data["w"], data["h"])
+        x, y = window_layout.clamp_origin(data["x"], data["y"], w, h, sw, sh)
+        return w, h, x, y
+    except Exception:
+        w, h = window_layout.DEFAULT_W, window_layout.DEFAULT_H
+        return w, h, int(sw - w - sw * 0.10), int(sh - h - sh * 0.05)
+
+W, H, OX, OY = saved_window()
+root.geometry("%dx%d+%d+%d" % (W, H, OX, OY))
 
 c = tk.Canvas(root, width=W, height=H, bg=_bar_bg, highlightthickness=0)
-c.pack()
-def rounded(x1, y1, x2, y2, r, **kw):
-    pts = [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y2-r, x2, y2, x2-r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y1+r, x1, y1]
-    return c.create_polygon(pts, smooth=True, **kw)
-rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
+c.pack(fill="both", expand=True)
+def rounded_points(x1, y1, x2, y2, r):
+    return [x1+r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y2-r, x2, y2, x2-r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y1+r, x1, y1]
+shell = c.create_polygon(rounded_points(1, 1, W-1, H-1, 22), smooth=True, fill=BG, outline="#3a4256")
 
 # title + status
-c.create_text(16, 16, text="🔊  " + APP_TITLE, anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
+title_id = c.create_text(16, 16, text="🔊  " + APP_TITLE, anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
 dot = c.create_oval(248, 11, 258, 21, fill=ACCENT, outline="")
 stxt = c.create_text(264, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
@@ -388,14 +402,95 @@ def show_status(*_):
         c.itemconfig(btn["play"][1], fill=ACCENT if value in ("Watching", "Reading") else DIM)
 status.trace_add("write", show_status)
 
-# drag anywhere on the background
+# drag the background to move; drag an edge or corner to resize
+EDGE = 8
 drag = {}
+resize = {}
+_CURSORS = {
+    "n": "sb_v_double_arrow", "s": "sb_v_double_arrow",
+    "e": "sb_h_double_arrow", "w": "sb_h_double_arrow",
+    "nw": "top_left_corner", "se": "bottom_right_corner",
+    "ne": "top_right_corner", "sw": "bottom_left_corner",
+}
+def edge_at(x, y):
+    width = max(c.winfo_width(), 1)
+    height = max(c.winfo_height(), 1)
+    left, right = x <= EDGE, x >= width - EDGE
+    top, bottom = y <= EDGE, y >= height - EDGE
+    if top and left:
+        return "nw"
+    if top and right:
+        return "ne"
+    if bottom and left:
+        return "sw"
+    if bottom and right:
+        return "se"
+    if top:
+        return "n"
+    if bottom:
+        return "s"
+    if left:
+        return "w"
+    if right:
+        return "e"
+    return ""
+def save_window():
+    try:
+        os.makedirs(platform.config_dir(), exist_ok=True)
+        json.dump({"w": root.winfo_width(), "h": root.winfo_height(), "x": root.winfo_x(), "y": root.winfo_y()},
+                  open(window_file(), "w", encoding="utf-8"))
+    except Exception:
+        pass
+def apply_box(x, y, width, height):
+    width, height = window_layout.clamp_size(width, height)
+    if "w" in resize.get("edge", ""):
+        x = resize["gx"] + resize["w"] - width
+    if "n" in resize.get("edge", ""):
+        y = resize["gy"] + resize["h"] - height
+    root.geometry("%dx%d+%d+%d" % (width, height, x, y))
 def press(e):
+    kind = edge_at(e.x, e.y)
+    if kind:
+        resize.update(edge=kind, x=e.x_root, y=e.y_root, gx=root.winfo_x(), gy=root.winfo_y(),
+                      w=root.winfo_width(), h=root.winfo_height())
+        drag.clear()
+        return
+    resize.clear()
+    if c.find_withtag("button"):
+        if c.find_overlapping(e.x, e.y, e.x, e.y) and set(c.find_overlapping(e.x, e.y, e.x, e.y)) & set(c.find_withtag("button")):
+            return
     drag.update(x=e.x, y=e.y)
 def move(e):
-    root.geometry(f"+{root.winfo_x() + e.x - drag['x']}+{root.winfo_y() + e.y - drag['y']}")
+    if resize:
+        dx = e.x_root - resize["x"]
+        dy = e.y_root - resize["y"]
+        width, height = resize["w"], resize["h"]
+        origin_x, origin_y = resize["gx"], resize["gy"]
+        if "e" in resize["edge"]:
+            width = resize["w"] + dx
+        if "s" in resize["edge"]:
+            height = resize["h"] + dy
+        if "w" in resize["edge"]:
+            width = resize["w"] - dx
+        if "n" in resize["edge"]:
+            height = resize["h"] - dy
+        apply_box(origin_x, origin_y, width, height)
+        return
+    if drag:
+        root.geometry("+%d+%d" % (root.winfo_x() + e.x - drag["x"], root.winfo_y() + e.y - drag["y"]))
+def hover_edge(e):
+    if resize or drag:
+        return
+    root.configure(cursor=_CURSORS.get(edge_at(e.x, e.y), ""))
+def release(_e):
+    resize.clear()
+    drag.clear()
+    root.configure(cursor="")
+    save_window()
 c.bind("<Button-1>", press)
 c.bind("<B1-Motion>", move)
+c.bind("<Motion>", hover_edge)
+c.bind("<ButtonRelease-1>", release)
 
 # round icon buttons
 tip_box = {"win": None}
@@ -420,8 +515,8 @@ def show_tip(event, text):
     tip.geometry("+%d+%d" % (x, y))
     tip_box["win"] = tip
 def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12, name=None):
-    circle = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="")
-    label = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size))
+    circle = c.create_oval(x-r, y-r, x+r, y+r, fill=PANEL, outline="", tags=("button",))
+    label = c.create_text(x, y, text=glyph, fill=color, font=("Segoe UI Symbol", size), tags=("button",))
     if name:
         btn[name] = (circle, label)
     def enter(e, circle=circle, tip=tip):
@@ -431,9 +526,14 @@ def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12, name=None)
         hide_tip()
         show_status()
     for item in (circle, label):
+        def click(e, action=action):
+            hide_tip()
+            if edge_at(e.x, e.y):
+                return
+            action()
         c.tag_bind(item, "<Enter>", enter)
         c.tag_bind(item, "<Leave>", leave)
-        c.tag_bind(item, "<Button-1>", lambda e, action=action: (hide_tip(), action()))
+        c.tag_bind(item, "<Button-1>", click)
 icon_button(120, "\u23EE", bot_prefs.TOOLBAR_TIPS["back"], lambda: flags.update(back=True), name="back")
 icon_button(165, "\u25A0", bot_prefs.TOOLBAR_TIPS["stop"], lambda: flags.update(stop=True), name="stop")
 icon_button(210, "\u275A\u275A", bot_prefs.TOOLBAR_TIPS["pause"], lambda: flags.update(pause=True), name="pause")
@@ -442,6 +542,26 @@ show_status()
 icon_button(300, "\u23ED", bot_prefs.TOOLBAR_TIPS["next"], lambda: flags.update(skip=True), name="next")
 icon_button(W-50, "\u2699", bot_prefs.TOOLBAR_TIPS["gear"], lambda: open_tuner(), y=17, r=11, size=10, name="gear")
 icon_button(W-22, "\u23FB", bot_prefs.TOOLBAR_TIPS["power"], lambda: flags.update(quit=True), RED, y=17, r=11, size=10, name="power")
+
+def relayout(width, height):
+    width, height = window_layout.clamp_size(width, height)
+    c.configure(width=width, height=height)
+    c.coords(shell, *rounded_points(1, 1, max(2, width - 1), max(2, height - 1), min(22, width // 4, height // 4)))
+    plan = window_layout.arrange(width, height)
+    c.coords(title_id, *plan["title"])
+    sx, sy = plan["status"]
+    c.coords(dot, sx, sy - 5, sx + 10, sy + 5)
+    c.coords(stxt, sx + 14, sy)
+    for name, x, y, radius in plan["buttons"]:
+        circle, glyph = btn[name]
+        c.coords(circle, x - radius, y - radius, x + radius, y + radius)
+        c.coords(glyph, x, y)
+def on_configure(event):
+    if event.widget is not root:
+        return
+    relayout(event.width, event.height)
+root.bind("<Configure>", on_configure)
+relayout(W, H)
 
 tuner = {"win": None}
 def open_tuner():
@@ -613,6 +733,7 @@ state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paus
 
 def tick():
     if flags["quit"]:
+        save_window()
         say("")
         root.destroy()
         return
