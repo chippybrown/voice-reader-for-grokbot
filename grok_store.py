@@ -334,23 +334,187 @@ def _transcripts(directory):
     return found
 
 
-def active_transcript(directory):
-    """The conversation Grok Bot wrote most recently. That is the open chat while it is updating."""
+_EXPLICIT_AGENT_KEYS = {
+    "selectedagentid", "activeagentid", "currentagentid", "openagentid",
+    "focusedagentid", "lastselectedagentid", "selectedagent", "activeagent",
+    "currentagent",
+}
+_SELECTED_FLAGS = ("selected", "active", "isSelected", "isActive", "isCurrent", "isOpen")
+_SELECTION_HINTS = (
+    "selected-agent", "selectedagent", "active-agent", "activeagent",
+    "current-agent", "currentagent", "ui-layout", "ui.layout", "ui.selection",
+    "focused-agent", "open-conversation", "last-opened", "lastopened",
+)
+
+
+def _key_name(key):
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _is_selection_slice(key):
+    if "transcript.replicas" in key:
+        return False
+    lowered = key.lower()
+    return any(hint in lowered for hint in _SELECTION_HINTS)
+
+
+def _flag_is_on(row, flag):
+    return row.get(flag) in (True, "true", 1)
+
+
+def _selected_roster_id(directory, known):
+    chosen = []
+    for row in roster_rows(directory):
+        agent_id = row.get("id")
+        if not isinstance(agent_id, str) or agent_id not in known:
+            continue
+        if any(_flag_is_on(row, flag) for flag in _SELECTED_FLAGS):
+            chosen.append(agent_id)
+    if len(chosen) == 1:
+        return chosen[0]
+    return None
+
+
+def _document_value(path):
+    try:
+        parsed = json.loads(_read_text(path))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(parsed, dict) and "value" in parsed:
+        return parsed.get("value")
+    return parsed
+
+
+def _collect_agent_ids(value, known, explicit, loose, loose_ok):
+    if isinstance(value, dict):
+        agent = value.get("id") if isinstance(value.get("id"), str) else value.get("agentId")
+        if loose_ok and isinstance(agent, str) and agent in known and any(_flag_is_on(value, flag) for flag in _SELECTED_FLAGS):
+            explicit.add(agent)
+        for key, item in value.items():
+            if _key_name(key) in _EXPLICIT_AGENT_KEYS and isinstance(item, str) and item in known:
+                explicit.add(item)
+            elif loose_ok and _key_name(key) in ("agentid", "conversationid") and isinstance(item, str) and item in known:
+                loose.add(item)
+            else:
+                _collect_agent_ids(item, known, explicit, loose, loose_ok)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_agent_ids(item, known, explicit, loose, loose_ok)
+    elif loose_ok and isinstance(value, str) and value in known:
+        loose.add(value)
+
+
+def _selected_slice_id(directory, known):
+    """An agent id named by a selection slice, or None when that is ambiguous."""
+    explicit = set()
+    loose = set()
+    for key, path in _slices(directory):
+        if "transcript.replicas" in key:
+            continue
+        value = _document_value(path)
+        if value is None:
+            continue
+        _collect_agent_ids(value, known, explicit, loose, _is_selection_slice(key))
+    if len(explicit) == 1:
+        return next(iter(explicit))
+    if not explicit and len(loose) == 1:
+        return next(iter(loose))
+    return None
+
+
+def agent_id_from_titles(titles, names):
+    """Roster agent id named by a window title. None when the title is ambiguous.
+
+    names is agent id -> sidebar name. The longest matching name wins, so
+    'Vision Design' beats 'Vision'. The bare app title is not a bot.
+    """
+    winners = {}
+    for title in titles or []:
+        text = " ".join(str(title or "").split())
+        if not text or text.lower() in ("grok bot", "grokbot", "grok", "grokbot voice"):
+            continue
+        folded = text.lower()
+        hits = []
+        for agent_id, name in names.items():
+            label = " ".join(str(name or "").split())
+            if label and label.lower() in folded:
+                hits.append((len(label), agent_id))
+        if not hits:
+            continue
+        hits.sort(reverse=True)
+        best = hits[0][0]
+        top = [agent_id for length, agent_id in hits if length == best]
+        if len(top) == 1:
+            winners[top[0]] = True
+    if len(winners) == 1:
+        return next(iter(winners))
+    return None
+
+
+def _user_message_stamp(entry):
+    """timestampMs of a message the person sent, not a bot or an agent note."""
+    if not isinstance(entry, dict) or _is_outbound(entry):
+        return None
+    if entry.get("kind") != "message" or entry.get("role") != "user":
+        return None
+    stamp = entry.get("timestampMs")
+    if isinstance(stamp, (int, float)):
+        return stamp
+    return None
+
+
+def _latest_user_transcript(rows):
+    best = None
+    best_stamp = None
+    for row in rows:
+        stamps = [_user_message_stamp(entry) for entry in row["entries"]]
+        stamps = [stamp for stamp in stamps if stamp is not None]
+        if not stamps:
+            continue
+        stamp = max(stamps)
+        if best_stamp is None or stamp > best_stamp:
+            best = row
+            best_stamp = stamp
+    return best
+
+
+def active_transcript(directory, window_titles=None):
+    """The conversation open in Grok Bot, not whichever bot wrote most recently.
+
+    A background bot updates its own transcript while Chip is looking at
+    another chat. The open chat is, in order: a selected agent saved in the
+    persistence slices, a roster row marked selected, the bot named in the
+    window title, then the conversation with the newest message from the
+    user. The newest file is only the last resort when none of those exist.
+    """
     rows = _transcripts(directory)
     if not rows:
         return None
+    by_id = {row["agent_id"]: row for row in rows}
+    known = set(by_id)
+    selected = _selected_slice_id(directory, known) or _selected_roster_id(directory, known)
+    if selected in by_id:
+        return by_id[selected]
+    named = agent_id_from_titles(window_titles, roster_names(directory))
+    if named in by_id:
+        return by_id[named]
+    latest = _latest_user_transcript(rows)
+    if latest is not None:
+        return latest
     rows.sort(key=lambda row: row["stamp"])
     return rows[-1]
 
 
-def reply_snapshot(directory):
+def reply_snapshot(directory, window_titles=None):
     """(lines, bot names, key lists, active file) for the open chat.
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
+    window_titles are Grok Bot window titles, used when no saved selection
+    names the open agent.
     """
     names = roster_names(directory)
-    transcript = active_transcript(directory)
+    transcript = active_transcript(directory, window_titles=window_titles)
     if transcript is None:
         return [], sorted(names.values(), key=len, reverse=True), [], None
     agent_id = transcript["agent_id"]

@@ -144,6 +144,59 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def _two_chats(self, root, larry_user_ms, amy_user_ms):
+        store = os.path.join(root, "sand-client-persistence")
+        _blob(store, "sand.client.slice.account.a.roster.last-roster",
+              '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy"}]}}')
+        larry = _blob(store, "sand.client.slice.account.a.transcript.replicas.larry",
+                      '{"schemaVersion":1,"value":{"entries":['
+                      '{"kind":"message","role":"user","id":"u-larry","seq":1,"timestampMs":%s,"content":"question for larry"},'
+                      '{"kind":"send-message","id":"r-larry","seq":2,"timestampMs":1700000009000,"message":{"type":"text","content":"larry reply"}},'
+                      '{"kind":"message","role":"assistant","id":"agent-outbound-larry","toAgent":{"id":"amy"},"seq":3,"timestampMs":1700000009500,"content":"larry side note"}'
+                      ']}}' % larry_user_ms)
+        amy = _blob(store, "sand.client.slice.account.a.transcript.replicas.amy",
+                    '{"schemaVersion":1,"value":{"entries":['
+                    '{"kind":"message","role":"user","id":"u-amy","seq":1,"timestampMs":%s,"content":"question for amy"},'
+                    '{"kind":"send-message","id":"r-amy","seq":2,"timestampMs":1700000008000,"message":{"type":"text","content":"amy reply"}}'
+                    ']}}' % amy_user_ms)
+        return store, larry, amy
+
+    def test_open_chat_ignores_other_bots(self):
+        root = tempfile.mkdtemp()
+        try:
+            store, larry_file, amy_file = self._two_chats(root, 1_700_000_000_000, 1_800_000_000_000)
+            # Amy's file is older on disk, but Amy is who Chip wrote to last.
+            os.utime(amy_file, (1_700_000_000, 1_700_000_000))
+            os.utime(larry_file, (1_700_000_500, 1_700_000_500))
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("amy reply", spoken)
+            self.assertNotIn("larry reply", spoken)
+            self.assertNotIn("larry side note", spoken)
+            # A saved selection beats both the latest user message and file time.
+            _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                  '{"schemaVersion":1,"value":{"selectedAgentId":"larry"}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+            self.assertNotIn("larry side note", spoken)
+            # With no selection slice, the window title names the open bot.
+            os.remove(os.path.join(store, grok_store.encode_base32("sand.client.slice.account.a.ui.selected-agent") + ".blob"))
+            lines, _names, _keys, _active = grok_store.reply_snapshot(store, window_titles=["Larry — Grok Bot"])
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+            # A roster row marked selected also names the open chat.
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
+            lines, _names = grok_store.reply_lines(store)
+            spoken = " ".join(lines)
+            self.assertIn("larry reply", spoken)
+            self.assertNotIn("amy reply", spoken)
+        finally:
+            shutil.rmtree(root)
+
     def test_active_chat_is_the_newest_file(self):
         root = tempfile.mkdtemp()
         try:

@@ -300,8 +300,32 @@ def read_chat():
     return found, []
 
 
+def grok_window_titles():
+    """The Grok Bot window title, when UI Automation can see it."""
+    try:
+        import uiautomation as auto
+        win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
+        if win.Exists(0, 0):
+            title = (win.Name or "").strip()
+            if title:
+                return [title]
+    except Exception:
+        pass
+    return []
+
+
 def read_snapshot():
-    """Windows identity is the on-screen text. active is None so the UI rules apply."""
+    """The open chat from saved files, with the window title as a hint.
+
+    The on-screen walk is only used when Grok Bot has not saved a store yet.
+    """
+    directory = persistence_dir()
+    if directory and os.path.isdir(directory):
+        try:
+            titles = grok_window_titles()
+        except Exception:
+            titles = []
+        return grok_store.reply_snapshot(directory, window_titles=titles)
     lines, names = read_chat()
     return lines, names, [[line] for line in lines], None
 

@@ -184,7 +184,7 @@ Use the same gear menu as on Windows: **Set xAI API key...**, paste the key from
 
 ### Where the chats are
 
-Grokbot Voice looks for Grok Bot's `sand-client-persistence` folder and follows the chat that was saved most recently (the one you have open while the bot is writing). It checks, in order:
+Grokbot Voice looks for Grok Bot's `sand-client-persistence` folder and follows only the conversation open in the app. It uses a saved selected agent when the files have one, otherwise the bot named in the Grok Bot window title, otherwise the conversation where you wrote most recently. Other bots are ignored, including ones still writing in the background. It checks, in order:
 
 - `GROKBOT_CHAT_DIR`, if you set that variable
 - the folder named in `~/.config/grokbot-voice/chat-folder.txt`, if that file exists

@@ -276,12 +276,46 @@ def read_chat():
     return lines, names
 
 
+def grok_window_titles():
+    """Titles of Grok Bot windows. Empty when no title can be read."""
+    titles = []
+    commands = (
+        ["xdotool", "search", "--class", "Grok Bot", "getwindowname"],
+        ["xdotool", "search", "--classname", "grok-bot", "getwindowname"],
+        ["wmctrl", "-l"],
+    )
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in (result.stdout or "").splitlines():
+            text = line.strip()
+            if command[0] == "wmctrl":
+                parts = text.split(None, 3)
+                text = parts[-1].strip() if len(parts) >= 4 else ""
+                if "grok" not in text.lower():
+                    continue
+            if not text or "grokbot voice" in text.lower():
+                continue
+            titles.append(text)
+        if titles:
+            return titles
+    return []
+
+
 def read_snapshot():
     """Lines, names, stable keys, and the active transcript path."""
     directory = persistence_dir()
     if not directory:
         return [], [], [], None
-    return grok_store.reply_snapshot(directory)
+    try:
+        titles = grok_window_titles()
+    except Exception:
+        titles = []
+    return grok_store.reply_snapshot(directory, window_titles=titles)
 
 
 def install_hotkeys(flags):
