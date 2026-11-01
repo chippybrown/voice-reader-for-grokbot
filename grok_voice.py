@@ -1,4 +1,4 @@
-# Grok Voice (automatic) for the Grok Bot desktop app on Windows.
+# Grokbot Voice (automatic) for the Grok Bot desktop app on Windows.
 # Shows a small always-on-top toolbar and speaks each new bot reply.
 # Keyboard shortcuts still work from any window:
 #   Ctrl+Alt+S = stop reading   Ctrl+Alt+P = pause/resume   Ctrl+Alt+Q = turn off
@@ -35,6 +35,70 @@ for f in piper_files:
         nm += " " + quality.title()
     choices.append((nm + " (natural)", "piper", f))
 
+# ---- Grok voice: the chief of staff bot's own voice from the Grok Bot app ----
+GV_DIR = os.path.join(os.environ.get("APPDATA", "."), "Grok Voice")
+CHIEF_FILE = os.path.join(GV_DIR, "chief of staff.txt")   # bot whose voice reads everything
+KEY_FILE = os.path.join(GV_DIR, "xai key.bin")             # xAI API key, encrypted for this Windows user
+def chief_name():
+    try:
+        return open(CHIEF_FILE).read().strip() or "Moya"
+    except Exception:
+        return "Moya"
+def chief_voice(name):
+    """Read the bot's saved voice (e.g. carina) from the Grok Bot app's local data."""
+    import re as _re
+    d = os.path.join(os.environ.get("APPDATA", "."), "Grok Bot", "sand-client-persistence")
+    pat = _re.compile(r'\{"id":"[0-9a-f-]{36}","name":"%s"' % _re.escape(name))
+    vpat = _re.compile(r'"voiceId":"([a-z]+)","voiceSpeed":([\d.]+)')
+    for f in glob.glob(os.path.join(d, "*.blob")):
+        try:
+            t = open("\\\\?\\" + os.path.abspath(f), encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        for m in pat.finditer(t):
+            v = vpat.search(t, m.end(), m.end() + 8000)
+            if v:
+                return v.group(1), float(v.group(2))
+    return ("carina", 1.0) if name == "Moya" else (None, 1.0)
+
+import ctypes as _ct
+from ctypes import wintypes as _wt
+class _BLOB(_ct.Structure):
+    _fields_ = [("cbData", _wt.DWORD), ("pbData", _ct.POINTER(_ct.c_char))]
+def _dpapi(data, protect):
+    src = _BLOB(len(data), _ct.cast(_ct.create_string_buffer(data, len(data)), _ct.POINTER(_ct.c_char)))
+    out = _BLOB()
+    fn = _ct.windll.crypt32.CryptProtectData if protect else _ct.windll.crypt32.CryptUnprotectData
+    if not fn(_ct.byref(src), None, None, None, None, 0, _ct.byref(out)):
+        raise OSError("Windows could not protect the key")
+    res = _ct.string_at(out.pbData, out.cbData)
+    _ct.windll.kernel32.LocalFree(out.pbData)
+    return res
+def load_key():
+    try:
+        return _dpapi(open(KEY_FILE, "rb").read(), False).decode()
+    except Exception:
+        return ""
+def save_key(k):
+    os.makedirs(GV_DIR, exist_ok=True)
+    open(KEY_FILE, "wb").write(_dpapi(k.strip().encode(), True))
+
+_chief = chief_name()
+_cv, _cspeed = chief_voice(_chief)
+if _cv:
+    choices.insert(0, ("%s's voice (Grok)" % _chief, "grok", _cv))
+
+def grok_audio(text, voice_id, speed):
+    """Ask xAI's speech service for 24 kHz 16-bit PCM in the given voice."""
+    import urllib.request
+    body = json.dumps({"text": text, "voice_id": voice_id, "language": "auto",
+                       "speed": max(0.7, min(1.5, speed)),
+                       "output_format": {"codec": "pcm", "sample_rate": 24000}}).encode()
+    req = urllib.request.Request("https://api.x.ai/v1/tts", data=body, method="POST", headers={
+        "Authorization": "Bearer " + load_key(), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
 piper_cache = {}
 speak_state = {"kind": "sapi", "ref": 0, "token": 0, "busy_until": 0.0, "making": False}
 
@@ -70,12 +134,40 @@ use_choice(saved)
 def stop_all():
     speak_state["token"] += 1
     speak_state["busy_until"] = 0.0
+    speak_state["held"] = False
+    if speak_state.pop("sapi_paused", False):
+        voice.Resume()
     voice.Speak("", ASYNC | PURGE)
     winsound.PlaySound(None, 0)
 
 def piper_job(text, token, wait):
     try:
         ref = speak_state["ref"]
+        if speak_state["kind"] == "grok":
+            try:
+                if not load_key():
+                    raise RuntimeError("no xAI key set")
+                pcm = grok_audio(text, ref, tune()["speed"])
+                if token != speak_state["token"]:
+                    return
+                params = wave._wave_params(1, 2, 24000, len(pcm) // 2, "NONE", "not compressed")
+                with wave.open(WAV, "wb") as w:
+                    w.setparams(params); w.writeframes(pcm)
+                secs = len(pcm) / 48000.0
+                speak_state["audio"] = (params, pcm)
+                speak_state["offset"] = 0.0
+                if speak_state.get("paused"):
+                    return
+                speak_state["play_start"] = time.time()
+                speak_state["busy_until"] = time.time() + secs
+                winsound.PlaySound(WAV, winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC))
+                return
+            except Exception as e:
+                log("Grok voice problem, using a local voice: %r" % (e,))
+                ref = next((c[2] for c in choices if c[1] == "piper" and c[0].startswith("Jenny")),
+                           next((c[2] for c in choices if c[1] == "piper"), None))
+                if ref is None:
+                    return
         if ref not in piper_cache:
             from piper import PiperVoice
             piper_cache[ref] = PiperVoice.load(ref)
@@ -94,18 +186,36 @@ def piper_job(text, token, wait):
         secs = params.nframes / float(rate)
         if token != speak_state["token"]:
             return
+        speak_state["audio"] = (params._replace(framerate=rate), frames)
+        speak_state["offset"] = 0.0
+        if speak_state.get("paused"):
+            return   # paused while the audio was being made: wait for Resume
+        speak_state["play_start"] = time.time()
         speak_state["busy_until"] = time.time() + secs
         winsound.PlaySound(WAV, winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC))
     except Exception as e:
         print("Piper problem:", e)
+        log("Piper problem: %r" % (e,))
     finally:
         if token == speak_state["token"]:
             speak_state["making"] = False
 
+LOG = os.path.join(os.environ.get("TEMP", "."), "grokbot_voice_log.txt")
+def log(msg):
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
+
 def say(text, wait=False):
+    if text:
+        log("speak [%s] %s" % (speak_state.get("label", "?"), text[:60].replace("\n", " ")))
     stop_all()
     if not text:
         return
+    speak_state["paused"] = False   # Back/Next/new reply while paused: play it and leave pause
+    flags["pause"] = False
     if speak_state["kind"] == "sapi":
         t = tune()
         voice.Rate = max(-10, min(10, round((t["speed"] - 1.0) * 10)))
@@ -119,7 +229,51 @@ def say(text, wait=False):
     else:
         threading.Thread(target=piper_job, args=(text, tok, False), daemon=True).start()
 
+WAV2 = os.path.join(os.environ.get("TEMP", "."), "grok_voice_resume.wav")
+def pause_audio():
+    """Pause mid-reply and remember the spot."""
+    speak_state["paused"] = True
+    if speak_state["kind"] == "sapi":
+        if voice.Status.RunningState == 2:
+            voice.Pause()
+            speak_state["sapi_paused"] = True
+        return
+    if time.time() < speak_state["busy_until"] and speak_state.get("audio"):
+        speak_state["offset"] += time.time() - speak_state.get("play_start", time.time())
+        speak_state["busy_until"] = 0.0
+        winsound.PlaySound(None, 0)
+        speak_state["held"] = True
+    elif speak_state["making"]:
+        speak_state["held"] = True   # audio still being made; it will wait
+
+def resume_audio():
+    """Carry on from the remembered spot."""
+    speak_state["paused"] = False
+    if speak_state["kind"] == "sapi":
+        if speak_state.pop("sapi_paused", False):
+            voice.Resume()
+        return
+    if not speak_state.pop("held", False):
+        return
+    if speak_state["making"]:
+        return   # job will play it when done
+    params, frames = speak_state["audio"]
+    width = params.sampwidth * params.nchannels
+    start = int(speak_state["offset"] * params.framerate) * width
+    rest = frames[start:]
+    if not rest:
+        return
+    with wave.open(WAV2, "wb") as w:
+        w.setparams(params)
+        w.writeframes(rest)
+    secs = len(rest) / float(width * params.framerate)
+    speak_state["play_start"] = time.time()
+    speak_state["busy_until"] = time.time() + secs
+    winsound.PlaySound(WAV2, winsound.SND_FILENAME | winsound.SND_ASYNC)
+
 def is_speaking():
+    if speak_state.get("held") or speak_state.get("sapi_paused"):
+        return True   # paused mid-reply still counts as this reply
     if speak_state["kind"] == "sapi":
         return voice.Status.RunningState == 2
     return speak_state["making"] or time.time() < speak_state["busy_until"]
@@ -144,8 +298,31 @@ def bot_replies():
         if name in ("Conversation details", "Computer preview"):
             inside = False
         if inside and " " in name and len(name) > 15 and not name.startswith(SKIP_STARTS):
+            if not announce(name).strip():
+                continue   # just a timestamp like "Cameron 6:50:11 AM", nothing to read
             found.append(name)
     return found
+
+# Bot names, longest first, so "Vision Design 3.0" wins over "Vision".
+BOT_NAMES = sorted(["Moya", "Research Bot", "Grass Hopper", "Time Card", "Design Bot", "Finance Bot",
+    "Radar", "Stock Bot", "My Life Bot", "Piper", "Jenny's Bot", "Money Bot", "Remote Access Bot",
+    "Cameron", "Vision Design 3.0", "E Watcher", "HA Fixer", "Vision", "Gideon", "Grok Bot",
+    "Estimating Bot", "Doc Bot", "Vision Bot", "Appian Bot Vision"], key=len, reverse=True)
+import re
+TIME_RE = re.compile(r"\b(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*,?\s+)?(?:\w{3,9}\s+\d{1,2},?\s+)?\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?\b")
+def announce(reply):
+    """'Cameron 6:50 AM Hello there' -> 'Hello there' (no bot name, no time)"""
+    text = next((reply[len(n) + 1:] for n in BOT_NAMES if reply.startswith(n + " ")), None)
+    if text is None:
+        text = reply.partition(" ")[2]
+    text = text.strip()
+    m = TIME_RE.match(text)            # time at the start
+    if m:
+        text = text[m.end():].strip()
+    m = re.search(TIME_RE.pattern + r"\s*$", text)   # time at the end
+    if m:
+        text = text[:m.start()].strip()
+    return text
 
 # ---------- toolbar (rounded, dark, draggable) ----------
 import ctypes
@@ -157,8 +334,14 @@ except Exception:
     pass
 
 BG, PANEL, FG, DIM, ACCENT, RED, KEY = "#1f2430", "#2a3040", "#e8ecf4", "#8a93a6", "#4cc38a", "#ff6b6b", "#ff00fe"
-W, H = 420, 74
+W, H = 300, 74
 root = tk.Tk()
+root.title("Grokbot Voice")
+try:
+    import sys as _sys
+    root.iconbitmap(os.path.join(getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))), "grokbot_voice.ico"))
+except Exception:
+    pass
 root.overrideredirect(True)
 root.attributes("-topmost", True)
 root.attributes("-transparentcolor", KEY)
@@ -175,9 +358,9 @@ def rounded(x1, y1, x2, y2, r, **kw):
 rounded(1, 1, W-1, H-1, 22, fill=BG, outline="#3a4256")
 
 # title + status
-c.create_text(16, 16, text="🔊  Grok Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
-dot = c.create_oval(W//2-40, 11, W//2-30, 21, fill=ACCENT, outline="")
-stxt = c.create_text(W//2-26, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
+c.create_text(16, 16, text="🔊  Grokbot Voice", anchor="w", fill=FG, font=("Segoe UI Semibold", 10))
+dot = c.create_oval(150, 11, 160, 21, fill=ACCENT, outline="")
+stxt = c.create_text(164, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
 def show_status(*_):
     v = status.get()
@@ -199,12 +382,12 @@ def icon_button(x, glyph, tip, action, color=FG, y=50, r=15, size=12):
         c.tag_bind(item, "<Enter>", lambda e: (c.itemconfig(b, fill="#3a4256"), c.itemconfig(stxt, text=tip)))
         c.tag_bind(item, "<Leave>", lambda e: (c.itemconfig(b, fill=PANEL), show_status()))
         c.tag_bind(item, "<Button-1>", lambda e: action())
-icon_button(32,  "\u23EE", "Back", lambda: flags.update(back=True))
-icon_button(72,  "\u25A0", "Stop reading", lambda: flags.update(stop=True))
-icon_button(112, "\u275A\u275A", "Pause", lambda: flags.update(pause=True))
-icon_button(152, "\u25B6", "Resume", lambda: flags.update(pause=False), ACCENT)
-icon_button(192, "\u23ED", "Next", lambda: flags.update(skip=True))
-icon_button(W-50, "\u2699", "Speed and pitch", lambda: open_tuner(), y=17, r=11, size=10)
+icon_button(70,  "\u23EE", "Back", lambda: flags.update(back=True))
+icon_button(110, "\u25A0", "Stop", lambda: flags.update(stop=True))
+icon_button(150, "\u275A\u275A", "Pause", lambda: flags.update(pause=True))
+icon_button(190, "\u25B6", "Resume", lambda: flags.update(pause=False), ACCENT)
+icon_button(230, "\u23ED", "Next", lambda: flags.update(skip=True))
+icon_button(W-50, "\u2699", "Settings", lambda: open_tuner(), y=17, r=11, size=10)
 icon_button(W-22, "\u23FB", "Turn off", lambda: flags.update(quit=True), RED, y=17, r=11, size=10)
 
 tuner = {"win": None}
@@ -217,7 +400,12 @@ def open_tuner():
     win.overrideredirect(True)
     win.attributes("-topmost", True)
     win.configure(bg=BG, highlightthickness=1, highlightbackground="#3a4256")
-    tk.Label(win, text="\u2699  " + speak_state["label"], bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
+    tk.Label(win, text="\u2699  Settings", bg=BG, fg=FG, font=("Segoe UI Semibold", 9)).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 2))
+    tk.Label(win, text="Voice", bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=4, column=0, padx=(10, 0), pady=(4, 2))
+    vb = tk.Button(win, text="\U0001F3A4 " + speak_state["label"] + "  \u25BE", bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
+                   relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9), anchor="w", width=28)
+    vb.configure(command=lambda: menu.tk_popup(vb.winfo_rootx(), vb.winfo_rooty() + vb.winfo_height()))
+    vb.grid(row=4, column=1, padx=(0, 10), pady=(4, 2), sticky="w")
     def slider(row, label, lo, hi, res, val, key):
         tk.Label(win, text=label, bg=BG, fg=DIM, font=("Segoe UI", 9), width=6, anchor="w").grid(row=row, column=0, padx=(10, 0))
         sc = tk.Scale(win, from_=lo, to=hi, resolution=res, orient="horizontal", length=200,
@@ -229,7 +417,7 @@ def open_tuner():
         sc.configure(command=changed)
     slider(1, "Speed", 0.5, 2.0, 0.1, t["speed"], "speed")
     slider(2, "Pitch", -10, 10, 1, t["pitch"], "pitch")
-    bar2 = tk.Frame(win, bg=BG); bar2.grid(row=3, column=0, columnspan=2, pady=(2, 8))
+    bar2 = tk.Frame(win, bg=BG); bar2.grid(row=5, column=0, columnspan=2, pady=(6, 8))
     def reset():
         tune_all[speak_state["label"]] = {"speed": 1.0, "pitch": 0}; save_tune(); win.destroy(); tuner["win"] = None; open_tuner()
     for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (win.destroy(), tuner.update(win=None)))):
@@ -241,35 +429,42 @@ def open_tuner():
 
 # voice switcher (click to cycle voices)
 short = [ch[0] for ch in choices]
-vbox = rounded(224, 37, W-14, 63, 12, fill=PANEL, outline="")
-vtxt = c.create_text((224 + W - 14)//2, 50, text="\U0001F3A4 " + short[saved], fill=FG, font=("Segoe UI", 9))
 def set_voice(i):
     use_choice(i)
-    if tuner["win"] is not None:
-        tuner["win"].destroy(); tuner["win"] = None
     open(SAVED, "w").write(short[i])
-    c.itemconfig(vtxt, text="\U0001F3A4 " + short[i])
-    say("This is " + short[i] + ".")
+    if tuner["win"] is not None:   # refresh the settings panel for the new voice
+        tuner["win"].destroy(); tuner["win"] = None
+        open_tuner()
 menu = tk.Menu(root, tearoff=0, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG, font=("Segoe UI", 9))
 for i, n in enumerate(short):
     menu.add_command(label=n, command=lambda i=i: set_voice(i))
 menu.add_separator()
 menu.add_command(label="\u2795  Get More Voices...", command=lambda: os.startfile("ms-settings:speech"))
-def next_voice(e=None):
-    menu.tk_popup(e.x_root, e.y_root)
-for item in (vbox, vtxt):
-    c.tag_bind(item, "<Button-1>", next_voice)
-    c.tag_bind(item, "<Enter>", lambda e: c.itemconfig(stxt, text="Change voice"))
-    c.tag_bind(item, "<Leave>", lambda e: show_status())
+def key_dialog():
+    win = tk.Toplevel(root); win.title("xAI API key"); win.configure(bg=PANEL); win.attributes("-topmost", True)
+    tk.Label(win, text="Paste your xAI API key (from console.x.ai).\nIt's saved encrypted for your Windows account only.",
+             bg=PANEL, fg=FG, font=("Segoe UI", 9), justify="left").pack(padx=12, pady=(10, 6), anchor="w")
+    e = tk.Entry(win, show="\u2022", width=44, bg="#11151c", fg=FG, insertbackground=FG, relief="flat")
+    e.pack(padx=12, pady=4); e.focus_set()
+    def ok():
+        k = e.get().strip()
+        if k:
+            save_key(k)
+            gi = next((i for i, ch in enumerate(choices) if ch[1] == "grok"), None)
+            if gi is not None:
+                set_voice(gi)
+        win.destroy()
+    tk.Button(win, text="Save", command=ok, bg=ACCENT, fg="white", relief="flat", padx=14).pack(pady=(6, 10))
+    win.bind("<Return>", lambda ev: ok())
+menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
 
 # ---------- watcher loop ----------
 _first = bot_replies()
 state = {"seen": set(_first), "history": list(_first), "pos": None, "queue": [], "paused": False, "next": 0}
-say("Grok Voice is on.")
 
 def tick():
     if flags["quit"]:
-        say("Grok Voice is off.", wait=True)
+        say("")
         root.destroy()
         return
     if flags["stop"]:
@@ -282,14 +477,14 @@ def tick():
         if h:
             state["pos"] = len(h) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
             state["queue"].clear()
-            say(h[state["pos"]])
+            say(announce(h[state["pos"]]))
     if flags["skip"]:   # Next
         flags["skip"] = False
         h = state["history"]
         if state["pos"] is not None and state["pos"] < len(h) - 1:
             state["pos"] += 1          # step forward through history
             state["queue"].clear()
-            say(h[state["pos"]])
+            say(announce(h[state["pos"]]))
         else:
             # stop the current reply now and go back to watching for a new one
             state["queue"].clear()
@@ -297,24 +492,50 @@ def tick():
             say("")
     if flags["pause"] != state["paused"]:
         state["paused"] = flags["pause"]
-        state["queue"].clear()
-        say("Grok Voice paused." if state["paused"] else "Grok Voice resumed.")
-        if not state["paused"]:
-            state["seen"] = set(bot_replies())   # skip what came in while paused
+        if state["paused"]:
+            pause_audio()       # silent; remembers the spot in this reply
+        else:
+            resume_audio()      # carry on from that spot, then keep watching
+            state["seen"].update(bot_replies())   # skip what came in while paused
     if not state["paused"] and time.time() >= state["next"]:
-        state["next"] = time.time() + 2
+        state["next"] = time.time() + 1
         try:
-            for reply in bot_replies():
-                if reply not in state["seen"]:
-                    state["seen"].add(reply)
+            cur = bot_replies()
+            seen = state["seen"]
+            known = [i for i, r in enumerate(cur) if r in seen]
+            prev = state.get("prev_cur", [])
+            if cur:
+                state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
+            def who(r):
+                return next((n for n in BOT_NAMES if r.startswith(n + " ")), r.partition(" ")[0])
+            switched = bool(cur) and (
+                (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
+                or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
+                or (not known and (prev or len(cur) > 1)))
+            if switched:
+                # new bot or chat: cut off the old read now, start at the bottom, all above counts as read
+                seen.update(cur)
+                state["history"] = list(cur)
+                state["queue"].clear()
+                # read only the bottom reply of the new chat; Back steps up from there
+                state["pos"] = len(cur) - 1
+                say(announce(cur[-1]))
+            else:
+                last_known = known[-1] if known else -1
+                for i, reply in enumerate(cur):
+                    if reply in seen:
+                        continue
+                    seen.add(reply)
+                    if i < last_known:
+                        continue   # older message (scrolled into view), not new
                     state["history"].append(reply)
                     state["pos"] = None
                     state["queue"].append(reply)
         except Exception:
             pass
     speaking = is_speaking()
-    if state["queue"] and not speaking:
-        say(state["queue"].pop(0))
+    if state["queue"] and not speaking and not state["paused"]:
+        say(announce(state["queue"].pop(0)))
         speaking = True
     if state["paused"]:
         new = "Paused"
