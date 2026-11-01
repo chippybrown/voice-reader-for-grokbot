@@ -20,9 +20,33 @@ else:
 import bot_prefs
 import grok_store
 import piper_setup
+import single_instance
 import window_layout
 from audio_util import write_pcm_wav
 from version import APP_TITLE
+
+# Claim the single-instance lock before hotkeys, settings, or the window.
+# A second start exits here, so it never speaks. The first window is raised.
+_window = {}
+
+def _another_launch():
+    window = _window.get("root")
+    if window is None:
+        return
+    def raise_window():
+        try:
+            window.lift()
+            window.attributes("-topmost", True)
+        except Exception:
+            pass
+    try:
+        window.after(0, raise_window)
+    except Exception:
+        pass
+
+_instance = single_instance.InstanceLock(platform.config_dir())
+if os.environ.get("GROKBOT_VOICE_SELFTEST") != "1" and not _instance.claim(_another_launch):
+    sys.exit(0)
 
 SAVED = platform.saved_voice_path()
 TUNE_FILE = platform.tune_path()
@@ -332,7 +356,9 @@ platform.install_hotkeys(flags)
 platform.hide_console()
 
 BG, PANEL, FG, DIM, ACCENT, RED, KEY = "#1f2430", "#2a3040", "#e8ecf4", "#8a93a6", "#4cc38a", "#ff6b6b", "#ff00fe"
+
 root = tk.Tk()
+_window["root"] = root
 root.title(APP_TITLE)
 platform.apply_icon(root)
 root.overrideredirect(True)
@@ -789,6 +815,7 @@ def tick():
     if flags["quit"]:
         save_window()
         say("")
+        _instance.release()
         root.destroy()
         return
     if flags["stop"]:            # Stop: end this reply and stop watching until Play

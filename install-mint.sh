@@ -312,6 +312,7 @@ Icon=${DEST}/assets/icon.png
 Terminal=false
 Categories=Audio;Utility;
 StartupNotify=false
+SingleMainWindow=true
 EOF
   if [ "$autostart" -eq 1 ]; then
     printf 'X-GNOME-Autostart-enabled=true\n' >> "$path"
