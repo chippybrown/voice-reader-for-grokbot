@@ -79,18 +79,20 @@ On Linux these shortcuts use the normal keyboard and do not need an administrato
 
 ## Voice commands
 
-Voice commands are on unless you turn them off. Grokbot Voice listens with the computer's microphone for four phrases. That microphone use is separate from the one Grok Bot uses when you talk to it.
+Voice commands are on unless you turn them off. Grokbot Voice listens with the computer's microphone for a few phrases that start with your bot's name. That microphone use is separate from the one Grok Bot uses when you talk to it.
 
-- Say **Moya sleep** or **Moya mute**. Your voice stops reaching Grok Bot. Moya keeps reading replies. The bar says **Mic muted**, a crossed-out microphone appears, and a short chime plays.
-- Say **Moya wake**, **Moya wake up**, **Moya listen**, or **Moya un mute**. Grok Bot can hear you again, and a higher chime plays. The small offline model does not know the single word "unmute", so that word is not a command.
+The name is your chief of staff if you have set one, otherwise the primary bot on your roster, otherwise whoever is in the open chat. Open the gear and edit **Wake name** if you want a different word. If your chief of staff is Larry, the phrases are:
 
-The phrases are ignored while a reply is being read, so Moya's own voice cannot mute the microphone. Stop, Pause, and Play are unchanged.
+- Say **Larry sleep** or **Larry mute**. Your voice stops reaching Grok Bot. Replies keep being read. The bar says **Mic muted**, a crossed-out microphone appears, and a short chime plays.
+- Say **Larry wake**, **Larry wake up**, **Larry listen**, or **Larry un mute**. Grok Bot can hear you again, and a higher chime plays. The small offline model does not know the single word "unmute", so that word is not a command.
 
-The first time you use this, Grokbot Voice downloads a small offline English speech model (about 40 MB) into its settings folder. After that, the phrases are recognized on this computer. Turn it off from the gear menu with **Voice commands (Moya mute / Moya wake)**.
+If several of those phrases are heard in one breath, the last one wins. Extra noise around them is ignored. The phrases are ignored while a reply is being read, so the bot's own voice cannot mute the microphone. Stop, Pause, and Play are unchanged.
 
-On Linux Mint, only Grok Bot's recording is muted, through PulseAudio or PipeWire. Grokbot Voice keeps its own microphone open so it can hear **Moya wake**. If Grok Bot starts recording again while the mute is on, that new recording is muted too.
+The first time you use this, Grokbot Voice downloads a small offline English speech model (about 40 MB) into its settings folder. After that, the phrases are recognized on this computer. If the model does not know your bot's name, it still listens and accepts a close-sounding name, and the log suggests picking a simpler wake name. Turn it off from the gear menu with **Voice commands (Larry mute / Larry wake)**, using your own name in place of Larry.
 
-On Windows, muting the microphone device would silence every program, including Grokbot Voice, and **Moya wake** would not be heard. Windows also ties an app's capture-volume switch to that same device mute, so that is not a separate control. Grokbot Voice instead turns off Grok Bot's microphone permission, the same switch as Settings, Privacy, Microphone, and leaves every other program allowed. If Grok Bot already had the microphone open, it can keep hearing until it opens the microphone again. A new recording it starts while muted is blocked.
+On Linux Mint, only Grok Bot's recording is muted, through PulseAudio or PipeWire. Grokbot Voice keeps its own microphone open so it can hear **Larry wake**. If Grok Bot starts recording again while the mute is on, that new recording is muted too.
+
+On Windows, muting the microphone device would silence every program, including Grokbot Voice, and **Larry wake** would not be heard. Windows also ties an app's capture-volume switch to that same device mute, so that is not a separate control. Grokbot Voice instead turns off Grok Bot's microphone permission, the same switch as Settings, Privacy, Microphone, and leaves every other program allowed. If Grok Bot already had the microphone open, it can keep hearing until it opens the microphone again. A new recording it starts while muted is blocked.
 
 ## Where settings are saved
 
@@ -143,7 +145,7 @@ bash ~/.local/share/grokbot-voice/install-mint.sh --uninstall
 
 That removes the program, the menu entry, and the desktop icon. Your settings, Piper voices, and xAI key stay.
 
-Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it. Say **Moya mute** or **Moya sleep** to stop your microphone from reaching Grok Bot, and **Moya wake**, **Moya wake up**, **Moya listen**, or **Moya un mute** to turn it back on. The single word "unmute" is not a command.
+Open the gear to switch voices. On a new install the voice is **Jenny (natural)**. Amy and Lessac are in the same list. espeak-ng is still there if you want it. The same panel has **Wake name**. If your bot is Larry, say **Larry mute** or **Larry sleep**, and **Larry wake** or **Larry wake up**, to control the microphone. The single word "unmute" is not a command.
 
 Grok Bot itself has a Linux desktop app. Download the **Linux .deb (x64)** from [cursor.com/download/bot](https://cursor.com/download/bot), then install it:
 

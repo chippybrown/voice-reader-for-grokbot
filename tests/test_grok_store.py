@@ -7,6 +7,7 @@ import unittest
 
 import grok_store
 import platform_linux
+import wake_cmd
 
 
 def _blob(directory, key, payload):
@@ -109,6 +110,20 @@ class StoreTests(unittest.TestCase):
             lines, _names = grok_store.reply_lines(store)
             self.assertEqual(len(lines), 1)
             self.assertIn("new chat", lines[0])
+        finally:
+            shutil.rmtree(root)
+
+    def test_wake_name_comes_from_the_roster_then_the_open_chat(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"a","name":"Larry","primary":true},{"id":"b","name":"Amy"}]}}')
+            _blob(store, "sand.client.slice.account.a.transcript.replicas.b",
+                  '{"schemaVersion":1,"value":{"entries":[{"kind":"send-message","id":"m","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"hi"}}]}}')
+            self.assertEqual(grok_store.primary_bot_name(store), "Larry")
+            self.assertEqual(grok_store.active_bot_name(store), "Amy")
+            self.assertEqual(wake_cmd.resolve_wake_name("", "", grok_store.primary_bot_name(store), grok_store.active_bot_name(store)), "Larry")
         finally:
             shutil.rmtree(root)
 

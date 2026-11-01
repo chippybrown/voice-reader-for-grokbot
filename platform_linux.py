@@ -37,6 +37,10 @@ def chief_path():
     return os.path.join(config_dir(), "chief-of-staff.txt")
 
 
+def wake_name_path():
+    return os.path.join(config_dir(), "wake-name.txt")
+
+
 def log_path():
     cache = os.environ.get("XDG_CACHE_HOME", "").strip() or os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(cache, "grokbot-voice", "log.txt")

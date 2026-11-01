@@ -36,6 +36,10 @@ def chief_path():
     return os.path.join(config_dir(), "chief of staff.txt")
 
 
+def wake_name_path():
+    return os.path.join(config_dir(), "wake-name.txt")
+
+
 def log_path():
     return os.path.join(os.environ.get("TEMP", "."), "grokbot_voice_log.txt")
 
@@ -332,7 +336,7 @@ def set_grok_mic_muted(muted):
     including our wake-phrase listener. Microsoft also documents that, for a
     shared-mode capture stream, ISimpleAudioVolume is tied to that same
     endpoint control, so muting Grok Bot's capture session is not a separate
-    switch. Either one would make "Moya wake" inaudible.
+    switch. Either one would make the wake phrase inaudible.
 
     Windows does publish a per-app microphone permission. It is the switch in
     Settings, Privacy, Microphone. We turn that off for Grok Bot.exe only, under

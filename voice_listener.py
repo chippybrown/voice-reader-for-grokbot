@@ -1,4 +1,4 @@
-# Offline "Moya mute" / "Moya wake" listener. The model is downloaded once.
+# Offline "<name> mute" / "<name> wake" listener. The model is downloaded once.
 import json
 import os
 import queue
@@ -11,16 +11,36 @@ import zipfile
 import wake_cmd
 
 
+def _capture_stderr(action):
+    """Run action and return text the C library wrote to stderr."""
+    import os
+    import tempfile
+    saved = os.dup(2)
+    handle = tempfile.TemporaryFile()
+    try:
+        os.dup2(handle.fileno(), 2)
+        action()
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+        handle.seek(0)
+        text = handle.read().decode("utf-8", "ignore")
+        handle.close()
+    return text
+
+
 class VoiceListener:
-    def __init__(self, config_dir, on_command, is_speaking, log):
+    def __init__(self, config_dir, on_command, is_speaking, log, wake_name):
         self.config_dir = config_dir
         self.on_command = on_command
         self.is_speaking = is_speaking
         self.log = log
+        self.wake_name = wake_name
         self.running = False
         self.thread = None
         self.quiet_until = 0.0
         self._stream = None
+        self._heard_name = ""
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -57,7 +77,7 @@ class VoiceListener:
         SetLogLevel(-1)
         try:
             model = Model(model_path)
-            recognizer = KaldiRecognizer(model, 16000, wake_cmd.GRAMMAR)
+            recognizer = self._recognizer_for(model)
             audio_q = queue.Queue()
 
             def callback(indata, frames, time_info, status):
@@ -82,6 +102,9 @@ class VoiceListener:
                         reset_next = True
                         recognizer.Reset()
                         continue
+                    fresh = self._recognizer_for(model)
+                    if fresh is not recognizer:
+                        recognizer = fresh
                     if reset_next:
                         reset_next = False
                         recognizer.Reset()
@@ -94,7 +117,7 @@ class VoiceListener:
                     except Exception:
                         heard = ""
                     action, self.quiet_until, reset = wake_cmd.consider_phrase(
-                        heard, False, time.time(), self.quiet_until)
+                        heard, False, time.time(), self.quiet_until, self._heard_name)
                     if reset:
                         recognizer.Reset()
                     if action and self.running:
@@ -103,6 +126,28 @@ class VoiceListener:
             self.log("voice commands stopped: %r" % (exc,))
         finally:
             self._stream = None
+
+    def _recognizer_for(self, model):
+        from vosk import KaldiRecognizer
+        name = ""
+        try:
+            name = self.wake_name() or ""
+        except Exception:
+            name = ""
+        if name == self._heard_name and getattr(self, "_recognizer", None) is not None:
+            return self._recognizer
+        self._heard_name = name
+        grammar = wake_cmd.grammar_for(name)
+        warning = _capture_stderr(lambda: KaldiRecognizer(model, 16000, grammar))
+        missing = wake_cmd.name_words_missing(warning, name)
+        if missing:
+            self.log("The speech model does not know %s. Voice commands will listen for a similar sound followed by mute or wake. A simpler wake name in Settings is easier to hear." % ", ".join(missing))
+            recognizer = KaldiRecognizer(model, 16000)
+        else:
+            recognizer = KaldiRecognizer(model, 16000, grammar)
+            self.log("voice commands listen for %s" % name)
+        self._recognizer = recognizer
+        return recognizer
 
     def _ensure_model(self):
         dest = os.path.join(self.config_dir, wake_cmd.MODEL_NAME)

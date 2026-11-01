@@ -188,21 +188,51 @@ def _slices(directory):
     return rows
 
 
-def roster_names(directory):
-    """agent id -> sidebar name."""
-    names = {}
+def roster_rows(directory):
+    """Roster entries in file order."""
+    rows = []
     for key, path in _slices(directory):
         if not ROSTER_SLICE.match(key):
             continue
         value = _load_value(path) or {}
         for row in value.get("rows") or []:
-            if not isinstance(row, dict):
-                continue
-            agent_id = row.get("id")
-            name = row.get("name")
-            if isinstance(agent_id, str) and isinstance(name, str) and name.strip():
-                names[agent_id] = name.strip()
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def roster_names(directory):
+    """agent id -> sidebar name."""
+    names = {}
+    for row in roster_rows(directory):
+        agent_id = row.get("id")
+        name = row.get("name")
+        if isinstance(agent_id, str) and isinstance(name, str) and name.strip():
+            names[agent_id] = name.strip()
     return names
+
+
+def primary_bot_name(directory):
+    """The marked primary bot, or the first bot on the roster."""
+    rows = roster_rows(directory)
+    for row in rows:
+        if row.get("primary") in (True, "true", 1) or row.get("isPrimary") in (True, "true", 1):
+            name = row.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+    for row in rows:
+        name = row.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return ""
+
+
+def active_bot_name(directory):
+    """Name of the bot whose transcript was saved most recently."""
+    transcript = active_transcript(directory)
+    if transcript is None:
+        return ""
+    return roster_names(directory).get(transcript["agent_id"]) or ""
 
 
 def chief_voice(directory, name):
