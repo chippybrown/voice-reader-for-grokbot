@@ -1,5 +1,6 @@
 # Windows pieces: SAPI, UI Automation, DPAPI, winsound, and the keyboard library.
 import os
+import subprocess
 import sys
 import time
 import wave
@@ -256,9 +257,30 @@ audio = WinAudio()
 _piper_cache = {}
 
 
+def find_piper():
+    """The Piper program downloaded into the app folder, if it is there."""
+    env = os.environ.get("GROKBOT_PIPER", "").strip()
+    local = os.path.join(piper_dir(), "piper.exe")
+    for path in (env, local):
+        if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
+
 def synthesize(kind, ref, text, speed, pitch, dest):
     if kind != "piper":
         raise RuntimeError("Windows synthesizer got %s" % kind)
+    binary = find_piper()
+    if binary:
+        ratio = pitch_ratio(pitch)
+        length = ratio / max(0.3, float(speed))
+        subprocess.run(
+            [binary, "--model", ref, "--output_file", dest, "--length_scale", "%.4f" % length],
+            input=text.encode("utf-8"),
+            check=True,
+        )
+        scale_wav_rate(dest, ratio)
+        return
     if ref not in _piper_cache:
         from piper import PiperVoice
         _piper_cache[ref] = PiperVoice.load(ref)

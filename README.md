@@ -24,18 +24,12 @@ On Linux Mint, install the Grok Bot desktop app as well. Grokbot Voice reads tha
 
 **Windows voices** (such as David and Zira) can speak as soon as you start. In Settings, open the voice list and choose **Get More Voices** to add more in Windows speech settings.
 
-**Piper voices** sound more natural and run on your computer. After a voice is downloaded, no internet is needed to use it.
+**Piper voices** sound more natural and run on your computer. The first time Grokbot Voice starts, and any time a voice is missing, it downloads Piper and a set of free English voices into its own folder. No administrator password and no question. The status line shows the progress. If you are offline, it keeps the voices it already has and uses a built-in voice until the next launch can try again.
 
-1. Open the voice list at <https://huggingface.co/rhasspy/piper-voices>.
-2. Download both files for the voice you want: the `.onnx` file and the matching `.onnx.json` file.
-3. Put those two files here (create the folders if they are not there yet):
+The free voices are Jenny, Amy, Lessac, Alba, Cori, and LJ Speech (female), plus Ryan, Alan, and Joe (male). A new install speaks with **Jenny**. Every Piper voice in that folder shows up in the voice picker. You can still add another voice by putting its `.onnx` and `.onnx.json` files in the Piper folder and restarting:
 
-   `%APPDATA%\Grok Voice\piper`
-
-   Paste that path into the File Explorer address bar. It usually opens something like `C:\Users\YourName\AppData\Roaming\Grok Voice\piper`.
-4. Restart Grokbot Voice. The new voice shows up in Settings.
-
-Jenny is an easy first voice: `en_GB-jenny_dioco-medium.onnx` and `en_GB-jenny_dioco-medium.onnx.json`. The same pair of files works for other voices, such as Amy, Lessac, and LJ Speech.
+- Windows: `%APPDATA%\Grok Voice\piper`
+- Linux: `~/.config/grokbot-voice/piper`
 
 **Grok voice (optional).** This uses the chief-of-staff bot's voice from the Grok Bot app. That bot is Moya unless you name a different one. The words are spoken by xAI's text-to-speech service. The steps are in the next section.
 
@@ -101,7 +95,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout grok_voice.py
+pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
@@ -178,7 +172,7 @@ python3 grok_voice.py
 
 ### 3. Piper voices
 
-The installer downloads Piper and three voices into `~/.config/grokbot-voice/piper`: Jenny, Amy, and Lessac. Jenny is selected the first time you start. Open the gear and click the voice name to pick another one. Files that are already there are left alone, so running the installer again does not download them twice.
+The installer, and the app itself the first time it starts, download Piper and the free English voices into `~/.config/grokbot-voice/piper`: Jenny, Amy, Lessac, Alba, Cori, LJ Speech, Ryan, Alan, and Joe. Jenny is selected on a new install. Files that are already there are left alone. Open the gear and click the voice name to pick another one.
 
 The Ubuntu package named `piper` is a game-controller tool, not this speech program. The installer does not use that package. You can point at a different Piper program with the `GROKBOT_PIPER` environment variable.
 
@@ -213,7 +207,7 @@ python3 -m pip install -r requirements-linux.txt
 python3 -m PyInstaller --noconfirm --onefile --noconsole --name grokbot-voice \
   --add-data "assets/icon.png:." \
   --hidden-import platform_linux --hidden-import grok_store --hidden-import audio_util \
-  --hidden-import version --hidden-import bot_prefs --hidden-import window_layout \
+  --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup \
   --collect-all keyring --collect-all secretstorage --collect-all pynput \
   grok_voice.py
 chmod +x packaging/linux/build-appimage.sh

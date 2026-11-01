@@ -278,37 +278,24 @@ install_piper() {
       return 0
       ;;
   esac
-  say "Installing Piper and the Jenny, Amy, and Lessac voices into ${piper_dir}."
+  say "Installing Piper and the free English voices into ${piper_dir}."
   if [ "$DRY" -eq 1 ]; then
-    say "dry-run: would download Piper for ${arch} and the three voices, skipping files already there"
+    say "dry-run: would download Piper for ${arch} and the free English voices, skipping files already there"
     return 0
   fi
   mkdir -p "$piper_dir"
-  if [ ! -x "${piper_dir}/piper" ]; then
-    local tar="${config}/piper_linux_${arch}.tar.gz"
-    fetch_file "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_${arch}.tar.gz" "$tar"
-    tar -C "$config" -xzf "$tar"
-    rm -f "$tar"
-    chmod +x "${piper_dir}/piper" || true
-  else
-    say "Piper is already installed."
+  # The app repeats this check on startup, so a failed download here is not fatal.
+  if ! PIPER_DIR="$piper_dir" PYTHONPATH="$DEST" python3 -c '
+import os, piper_setup
+def say(message):
+    print(message, flush=True)
+raise SystemExit(0 if piper_setup.ensure(os.environ["PIPER_DIR"], "linux", say) else 1)
+'; then
+    say "Piper download did not finish. The app will try again when it starts."
   fi
-  local base="https://huggingface.co/rhasspy/piper-voices/resolve/main/en"
-  local voice name
-  for voice in \
-    "en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium" \
-    "en_US/amy/medium/en_US-amy-medium" \
-    "en_US/lessac/medium/en_US-lessac-medium"
-  do
-    name="${voice##*/}"
-    if [ -s "${piper_dir}/${name}.onnx" ] && [ -s "${piper_dir}/${name}.onnx.json" ]; then
-      say "Voice ${name} is already present."
-      continue
-    fi
-    say "Downloading ${name}."
-    fetch_file "${base}/${voice}.onnx" "${piper_dir}/${name}.onnx"
-    fetch_file "${base}/${voice}.onnx.json" "${piper_dir}/${name}.onnx.json"
-  done
+  if [ -f "${piper_dir}/piper" ]; then
+    chmod +x "${piper_dir}/piper" || true
+  fi
 }
 
 write_desktop_file() {

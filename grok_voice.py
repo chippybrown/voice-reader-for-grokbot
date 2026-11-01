@@ -19,6 +19,7 @@ else:
 
 import bot_prefs
 import grok_store
+import piper_setup
 import window_layout
 from audio_util import write_pcm_wav
 from version import APP_TITLE
@@ -90,14 +91,7 @@ try:
     saved_label = open(SAVED, encoding="utf-8").read().strip()
 except Exception:
     pass
-saved = next((i for i, ch in enumerate(choices) if ch[0] == saved_label), 0)
-# A fresh Linux install speaks with Piper Jenny (then Amy) instead of espeak-ng.
-if not saved_label and sys.platform != "win32":
-    for prefix in ("Jenny", "Amy"):
-        hit = next((i for i, ch in enumerate(choices) if ch[1] == "piper" and ch[0].startswith(prefix)), None)
-        if hit is not None:
-            saved = hit
-            break
+saved = piper_setup.preferred_index([ch[0] for ch in choices], saved_label)
 use_choice(saved)
 
 BOT_FILE = os.path.join(platform.config_dir(), "bot settings.json")
@@ -381,6 +375,7 @@ title_id = c.create_text(16, 16, text="🔊  " + APP_TITLE, anchor="w", fill=FG,
 dot = c.create_oval(248, 11, 258, 21, fill=ACCENT, outline="")
 stxt = c.create_text(264, 16, text="Watching", anchor="w", fill=DIM, font=("Segoe UI", 9))
 status = tk.StringVar(value="Watching")
+hold_status = {"text": ""}
 LABELS = {"Stopped": "Not monitoring", "Paused": "Reading paused"}
 btn = {}   # name -> (circle, glyph)
 def base_fill(name):
@@ -692,10 +687,6 @@ def set_voice(i):
         tuner["win"] = None
         open_tuner()
 menu = tk.Menu(root, tearoff=0, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG, font=("Segoe UI", 9))
-for i, n in enumerate(short):
-    menu.add_command(label=n, command=lambda i=i: set_voice(i))
-menu.add_separator()
-menu.add_command(label="\u2795  Get More Voices...", command=platform.open_more_voices)
 def key_dialog():
     win = tk.Toplevel(root)
     win.title("xAI API key")
@@ -720,7 +711,53 @@ def key_dialog():
         win.destroy()
     tk.Button(win, text="Save", command=ok, bg=ACCENT, fg="white", relief="flat", padx=14).pack(pady=(6, 10))
     win.bind("<Return>", lambda ev: ok())
-menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
+
+def fill_voice_menu():
+    menu.delete(0, "end")
+    for i, n in enumerate(short):
+        menu.add_command(label=n, command=lambda i=i: set_voice(i))
+    menu.add_separator()
+    menu.add_command(label="\u2795  Get More Voices...", command=platform.open_more_voices)
+    menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
+
+def refresh_downloaded_voices():
+    """Rebuild the picker after Piper voices land, and start on Jenny if unset."""
+    global saved
+    fresh = platform.voice_choices()
+    chief = chief_name()
+    voice_id, _speed = grok_store.chief_voice(platform.persistence_dir(), chief)
+    if voice_id:
+        fresh.insert(0, ("%s's voice (Grok)" % chief, "grok", voice_id))
+    if not fresh:
+        fresh.append(("English (espeak-ng)", "espeak", "en"))
+    choices[:] = fresh
+    short[:] = [ch[0] for ch in choices]
+    saved = piper_setup.preferred_index(short, saved_voice_label())
+    use_choice(saved)
+    fill_voice_menu()
+    if tuner["win"] is not None:
+        tuner["win"].destroy()
+        tuner["win"] = None
+        open_tuner()
+
+def download_piper_voices():
+    def progress(message):
+        hold_status["text"] = message
+    try:
+        ready = piper_setup.ensure(platform.piper_dir(), sys.platform, progress)
+    except Exception as exc:
+        log("piper download: %r" % (exc,))
+        ready = False
+    def finish():
+        if ready:
+            refresh_downloaded_voices()
+            hold_status["text"] = ""
+        else:
+            hold_status["text"] = "Piper voices unavailable. Using built-in voices."
+            root.after(5000, lambda: hold_status.update(text=""))
+    root.after(0, finish)
+
+fill_voice_menu()
 
 # ---------- watcher loop ----------
 # Replies already on screen at launch are history. Only a reply that appears
@@ -863,7 +900,10 @@ def tick():
         new = "Paused"
     else:
         new = "Reading" if speaking else "Watching"
-    if status.get() != new:
+    if hold_status["text"]:
+        if status.get() != hold_status["text"]:
+            status.set(hold_status["text"])
+    elif status.get() != new:
         status.set(new)
     root.after(200, tick)
 
@@ -872,5 +912,6 @@ if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.update()
     root.destroy()
 else:
+    threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
     root.after(200, tick)
     root.mainloop()
