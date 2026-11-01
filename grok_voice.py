@@ -440,10 +440,11 @@ def key_dialog():
 menu.add_command(label="\U0001F511  Set xAI API key...", command=key_dialog)
 
 # ---------- watcher loop ----------
+# Replies already on screen at launch are history. Only a reply that appears
+# after this baseline is read aloud. Back and Next can still walk the history.
 _lines, _keys, _active = chat_snapshot()
 _seen = set()
-for _keyset in _keys:
-    _seen.update(_keyset)
+grok_store.mark_seen(_seen, _keys)
 state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
          "file_key": _active, "prev_cur": list(_lines)}
 
@@ -500,29 +501,33 @@ def tick():
                 # Only ids that show up on a later look are read. Position is ignored.
                 if active != state.get("file_key"):
                     state["file_key"] = active
-                    for keyset in keys:
-                        seen.update(keyset)
+                    grok_store.mark_seen(seen, keys)
                     state["history"] = list(cur)
                     state["prev_cur"] = list(cur)
                     state["queue"].clear()
                     state["pos"] = None
                 else:
-                    for line, keyset in zip(cur, keys):
-                        if any(key in seen for key in keyset):
-                            seen.update(keyset)
-                            continue
-                        seen.update(keyset)
+                    for line in grok_store.unseen_lines(seen, cur, keys):
                         state["history"].append(line)
                         state["pos"] = None
                         state["queue"].append(line)
             else:
                 known = [i for i, reply in enumerate(cur) if reply in seen]
                 prev = state.get("prev_cur", [])
+                if grok_store.launch_is_baseline(seen, cur, prev):
+                    # The window was not ready at launch. This first view is history.
+                    seen.update(cur)
+                    state["history"] = list(cur)
+                    state["prev_cur"] = list(cur)
+                    state["queue"].clear()
+                    state["pos"] = None
+                    known = list(range(len(cur)))
+                    prev = list(cur)
                 if cur:
                     state["prev_cur"] = list(cur)   # keep the last real view while a chat loads
                 def who(reply):
                     return next((name for name in BOT_NAMES if reply.startswith(name + " ")), reply.partition(" ")[0])
-                switched = bool(cur) and (
+                switched = bool(cur) and not grok_store.launch_is_baseline(seen, cur, prev) and (
                     (prev and not set(prev) & set(cur))                 # nothing in common with the last chat
                     or (prev and who(prev[-1]) != who(cur[-1]))         # a different bot is on screen
                     or (not known and (prev or len(cur) > 1)))

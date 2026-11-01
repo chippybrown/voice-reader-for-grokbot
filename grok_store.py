@@ -387,6 +387,17 @@ def mark_seen(seen, keylists):
         seen.update(keys)
 
 
+def launch_is_baseline(seen, lines, previous):
+    """True for the first on-screen view after a start that saw nothing yet.
+
+    A window that is not ready at launch must not be treated as a new chat.
+    The replies already there are history. Back and Next can reach them.
+    """
+    if not lines or previous:
+        return False
+    return not any(line in seen for line in lines)
+
+
 def unseen_lines(seen, lines, keylists):
     """Lines whose message id or content hash has not been seen yet.
 

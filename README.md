@@ -65,7 +65,9 @@ The buttons stay quiet. Only **Test** in Settings speaks. Everything else just d
 - **Status light** is green for Watching, blue for Reading, amber for Reading paused, and red for Not monitoring.
 - **Turn off** is the red button in the top right. It closes Grokbot Voice.
 
-When you switch to another chat or another bot, reading stops and only the bottom reply of that chat is read. **Back** steps up from there.
+When Grokbot Voice starts, or starts again, replies already in the chat stay quiet. Only a reply that arrives after launch is read. **Back** and **Next** still move through the earlier ones. Notes a bot sends to another agent are never read.
+
+On Linux, opening a different saved chat stays quiet the same way, until a new reply arrives in that chat. On Windows, switching to another chat reads only the bottom reply, and **Back** steps up from there.
 
 ## Keyboard shortcuts
 

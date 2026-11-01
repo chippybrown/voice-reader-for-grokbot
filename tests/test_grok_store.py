@@ -66,6 +66,54 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_restart_with_existing_history_reads_nothing_until_a_new_reply(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            key = "sand.client.slice.account.a.transcript.replicas.agent-123"
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"note-a","toAgent":{"id":"cloud"},"seq":1,"timestampMs":1700000000000,"content":"to another agent"},'
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-2","seq":2,"timestampMs":1700000000500,"content":"outbound note"},'
+                  '{"kind":"send-message","id":"old-1","seq":3,"timestampMs":1700000001000,"message":{"type":"text","content":"older reply"}},'
+                  '{"kind":"send-message","id":"old-2","seq":4,"timestampMs":1700000002000,"message":{"type":"text","content":"newest already here"}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            spoken = " ".join(lines)
+            self.assertIn("older reply", spoken)
+            self.assertIn("newest already here", spoken)
+            self.assertNotIn("to another agent", spoken)
+            self.assertNotIn("outbound note", spoken)
+            # A fresh process baselines whatever is already saved.
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            # Restarting does the same with a new seen set. History is still quiet.
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
+            self.assertTrue(grok_store.launch_is_baseline(set(), ["Bot older reply", "Bot newest already here"], []))
+            self.assertFalse(grok_store.launch_is_baseline(seen, lines, lines))
+            # The slice is rewritten and a reply arrives after launch.
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"assistant","id":"agent-outbound-2","seq":1,"timestampMs":1700000000500,"content":"outbound note"},'
+                  '{"kind":"send-message","id":"old-1","seq":8,"timestampMs":1700000001000,"message":{"type":"text","content":"older reply"}},'
+                  '{"kind":"send-message","id":"old-2","seq":9,"timestampMs":1700000002000,"message":{"type":"text","content":"newest already here"}},'
+                  '{"kind":"send-message","id":"new-1","seq":10,"timestampMs":1700000003000,"message":{"type":"text","content":"arrived after launch"}}'
+                  ']}}')
+            lines, _names, keylists, _active = grok_store.reply_snapshot(store)
+            fresh = grok_store.unseen_lines(seen, lines, keylists)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("arrived after launch", fresh[0])
+            self.assertNotIn("older reply", " ".join(fresh))
+            self.assertNotIn("newest already here", " ".join(fresh))
+            self.assertNotIn("outbound note", " ".join(lines))
+            self.assertIn("older reply", " ".join(lines))
+        finally:
+            shutil.rmtree(root)
+
     def test_rewrite_does_not_reread_old_replies(self):
         root = tempfile.mkdtemp()
         try:
