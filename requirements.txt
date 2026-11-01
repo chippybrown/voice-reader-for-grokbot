@@ -6,3 +6,5 @@ onnxruntime
 pyinstaller
 keyring
 pynput
+vosk
+sounddevice

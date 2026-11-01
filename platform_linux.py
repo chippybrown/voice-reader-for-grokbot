@@ -7,6 +7,7 @@ import sys
 import threading
 
 import grok_store
+import wake_cmd
 from audio_util import pitch_ratio, scale_wav_rate
 
 KEYRING_SERVICE = "grokbot-voice"
@@ -305,6 +306,32 @@ def install_hotkeys(flags):
         _hotkeys = listener
     except Exception as exc:
         _log_hotkey(exc)
+
+
+def play_chime(path):
+    """A second player, so the chime mixes and does not cut off a reply."""
+    command = _player_command(path)
+    if not command:
+        return
+    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def set_grok_mic_muted(muted):
+    """Mute only Grok Bot's capture streams. Our listener is a different program.
+
+    pactl source-outputs are the programs currently recording. New ones can
+    appear while the mute is on, so the toolbar asks again about once a second.
+    """
+    try:
+        result = subprocess.run(["pactl", "list", "source-outputs"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    flag = "1" if muted else "0"
+    for output_id in wake_cmd.grok_bot_source_ids(result.stdout or ""):
+        try:
+            subprocess.run(["pactl", "set-source-output-mute", output_id, flag], check=False, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def _log_hotkey(exc):
