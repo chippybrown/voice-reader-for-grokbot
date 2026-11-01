@@ -35,6 +35,14 @@ class WakeTests(unittest.TestCase):
         self.assertIsNone(wake_cmd.phrase_action("[unk]"))
         self.assertIsNone(wake_cmd.phrase_action("moya please mute"))
 
+    def test_noisy_mic_results(self):
+        self.assertEqual(wake_cmd.phrase_action("[unk] moya mute moya mute"), "mute")
+        self.assertEqual(wake_cmd.phrase_action("moya mute moya mute moya mute"), "mute")
+        self.assertEqual(wake_cmd.phrase_action("[unk] sleep moya mute [unk]"), "mute")
+        self.assertEqual(wake_cmd.phrase_action("moya mute moya wake"), "unmute")
+        self.assertEqual(wake_cmd.phrase_action("moya wake up moya mute"), "mute")
+        self.assertEqual(wake_cmd.phrase_action("[unk]"), None)
+
     def test_echo_is_ignored_and_resets(self):
         action, quiet, reset = wake_cmd.consider_phrase("moya mute", True, 10.0, 0.0)
         self.assertIsNone(action)

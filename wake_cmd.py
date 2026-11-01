@@ -31,9 +31,25 @@ _BOT_BASENAMES = {
 
 
 def phrase_action(text):
-    """'moya mute' -> 'mute'. Anything else, including [unk], is None."""
-    cleaned = " ".join((text or "").lower().split())
-    return PHRASES.get(cleaned)
+    """Find a command inside a noisy Vosk result. The last phrase wins.
+
+    '[unk]' tokens are dropped first. 'moya mute moya wake' unmutes.
+    A phrase has to be contiguous words, so 'moya please mute' is ignored.
+    """
+    tokens = [token for token in (text or "").lower().split() if token != "[unk]"]
+    if not tokens:
+        return None
+    phrases = sorted(((phrase.split(), action) for phrase, action in PHRASES.items()), key=lambda item: len(item[0]), reverse=True)
+    last_action = None
+    last_end = -1
+    for start in range(len(tokens)):
+        for words, action in phrases:
+            end = start + len(words)
+            if tokens[start:end] == words and end >= last_end:
+                last_action = action
+                last_end = end
+                break
+    return last_action
 
 
 def consider_phrase(text, speaking, now, quiet_until):
