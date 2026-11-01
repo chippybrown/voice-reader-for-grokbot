@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build Grok Voice
+        run: pyinstaller --noconfirm --onefile --noconsole --name "Grok Voice" --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream grok_voice.py
+
+      - name: Attach the executable to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            dist/Grok Voice.exe

@@ -1,0 +1,6 @@
+uiautomation
+keyboard
+comtypes
+piper-tts
+onnxruntime
+pyinstaller
