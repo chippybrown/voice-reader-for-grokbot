@@ -109,13 +109,13 @@ Pushing a version tag such as `v1.3.0` runs that same build on GitHub and attach
 The short way is one command. Paste it in a terminal. An administrator gets everything: the system packages, the app, a menu entry, a desktop icon, and Piper with the Jenny, Amy, and Lessac voices. Run it again any time to update. It asks before turning on start-at-login, and the answer is No if there is no terminal.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/main/install-mint.sh | bash
 ```
 
 If you are not an administrator and those packages are already installed, the same command skips apt and continues. You can also force that with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash -s -- --no-apt
+curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/main/install-mint.sh | bash -s -- --no-apt
 ```
 
 If something is still missing, it prints the exact `sudo apt-get install` line for an administrator and stops.

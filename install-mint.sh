@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # One-step install for Grokbot Voice on Linux Mint.
-#   curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/cursor/linux-mint-port-ecad/install-mint.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/main/install-mint.sh | bash
 # Run it again to update. Remove it with: bash install-mint.sh --uninstall
 set -euo pipefail
 
 REPO_URL="https://github.com/chippybrown/voice-reader-for-grokbot.git"
-BRANCH="${GROKBOT_VOICE_BRANCH:-cursor/linux-mint-port-ecad}"
+BRANCH="${GROKBOT_VOICE_BRANCH:-main}"
 DEST="${HOME}/.local/share/grokbot-voice"
 LAUNCHER="${HOME}/.local/bin/grokbot-voice"
 MENU_ENTRY="${HOME}/.local/share/applications/grokbot-voice.desktop"
@@ -47,7 +47,7 @@ Usage: install-mint.sh [--dry-run] [--uninstall]
   --no-apt     Do not install system packages. Use this when they are already installed.
   --uninstall  Remove the app, menu entry, and autostart. Settings stay.
 
-  GROKBOT_VOICE_BRANCH   Git branch to install (default: cursor/linux-mint-port-ecad)
+  GROKBOT_VOICE_BRANCH   Git branch to install (default: main)
 EOF
 }
 
