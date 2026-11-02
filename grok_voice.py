@@ -343,10 +343,19 @@ def announce(reply):
     return grok_store.render_speech(text)
 
 _logged_store = False
+_logged_open = {"line": None}
+def log_open_chat():
+    """One line when the chat we believe is on screen changes."""
+    line = grok_store.open_chat_line()
+    if line and line != _logged_open["line"]:
+        _logged_open["line"] = line
+        log(line)
+
 def chat_snapshot():
     """Visible replies, stable keys, and the open transcript path."""
     global _logged_store
     lines, names, keylists, active = platform.read_snapshot()
+    log_open_chat()
     if not _logged_store:
         _logged_store = True
         folder = os.path.dirname(active) if active else (platform.persistence_dir() or "(not found)")
@@ -1057,6 +1066,7 @@ def _tick():
         _heartbeat()
         try:
             cur, names, keys, active, skipped = platform.watch_snapshot(state["seen"], state.get("file_key"))
+            log_open_chat()
             for problem in list(grok_store._read_problems.values()):
                 if problem not in state["explained"]:
                     state["explained"].add(problem)

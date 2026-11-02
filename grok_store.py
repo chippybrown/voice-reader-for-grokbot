@@ -688,15 +688,33 @@ def _account_for_key(key, accounts):
     return matches[0]
 
 
-def _selection_hits(slices, accounts, known):
-    """(mtime, agent id, account or None) for slices that name one open bot.
+def _selection_strength(key):
+    """selected-agent is this window. last-opened is often another device."""
+    lowered = key.lower()
+    weak = ("last-opened", "lastopened", "open-conversation")
+    strong = (
+        "selected-agent", "selectedagent", "active-agent", "activeagent",
+        "current-agent", "currentagent", "focused-agent", "ui.selection", "ui-selection",
+    )
+    if any(hint in lowered for hint in weak) and not any(hint in lowered for hint in strong):
+        return "weak"
+    if _is_selection_slice(key):
+        return "strong"
+    return None
 
-    The newest hit wins. An older account's saved selection cannot outvote
-    the account that was just opened.
+
+def _selection_hits(slices, accounts, known):
+    """(mtime, agent id, account or None, strength) for slices that name one open bot.
+
+    The newest strong hit wins. last-opened is kept only when nothing stronger
+    exists, because another device rewrites that slice while this window stays put.
     """
     hits = []
     for key, path in slices:
         if "transcript.replicas" in key or not _is_selection_slice(key):
+            continue
+        strength = _selection_strength(key)
+        if not strength:
             continue
         value = _document_value(path)
         if value is None:
@@ -705,7 +723,7 @@ def _selection_hits(slices, accounts, known):
         _current_agent_ids(value, known, found)
         if len(found) != 1:
             continue
-        hits.append((_mtime(path), next(iter(found)), _account_for_key(key, accounts)))
+        hits.append((_mtime(path), next(iter(found)), _account_for_key(key, accounts), strength))
     return hits
 
 
@@ -890,6 +908,40 @@ def _row_for(rows, account, agent_id):
     return None
 
 
+def _newest_message_ms(row):
+    newest = 0
+    for entry in row.get("entries") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("timestampMs"), (int, float)):
+            newest = max(newest, entry["timestampMs"])
+    return newest
+
+
+def _live_row(rows):
+    """The transcript whose file changed last. A new reply updates that file."""
+    if not rows:
+        return None
+    return max(rows, key=lambda row: (row.get("stamp") or 0, _newest_message_ms(row)))
+
+
+# What the reader last decided. Logged only when it changes.
+_open_choice = {"line": None, "selection": None}
+
+
+def _remember_open(names, row, how):
+    if row is None:
+        bot = "uncertain"
+    else:
+        bot = names.get(row.get("agent_id")) or row.get("agent_id") or "unknown"
+    line = "open chat: %s (%s)" % (bot, how)
+    _open_choice["line"] = line
+    return line
+
+
+def open_chat_line():
+    """The latest open-chat decision, including why."""
+    return _open_choice["line"]
+
+
 def _chat_was_opened(row):
     """True when the transcript file was saved again without a new message.
 
@@ -951,24 +1003,51 @@ def active_transcript(directory, window_titles=None, directories=None):
             continue
         picked = _roster_selected_id([(key, path)], account, known)
         if picked:
-            hits.append((_mtime(path), picked, account))
-    hits.sort()
-    selection_mtime = hits[-1][0] if hits else None
-    selection_id = hits[-1][1] if hits else None
+            hits.append((_mtime(path), picked, account, "strong"))
+    strong = [hit for hit in hits if hit[3] == "strong"]
+    weak = [hit for hit in hits if hit[3] == "weak"]
+    ranked = strong or weak
+    ranked.sort()
+    selection_mtime = ranked[-1][0] if ranked else None
+    selection_id = ranked[-1][1] if ranked else None
+    if ranked and ranked[-1][3] == "weak":
+        live = _live_row(scoped)
+        # Another device's last-opened slice must not hide the chat that just changed.
+        if live and live["agent_id"] != selection_id and (live.get("stamp") or 0) >= (selection_mtime or 0):
+            selection_mtime = None
+            selection_id = None
+    _open_choice["selection"] = selection_id if strong else None
+    names = _names
+
+    def choose(row, how):
+        _remember_open(names, row, how)
+        return row
+
     opened = _focused_opens(scoped)
     if len(opened) == 1 and (selection_mtime is None or opened[0]["stamp"] > selection_mtime + 0.5):
-        return opened[0]
+        chosen = opened[0]
+        live = _live_row(scoped)
+        # A sync rewrites an idle chat and makes it look opened. If a different
+        # chat's file is newer, that is the conversation on this screen.
+        # A strong selection that names this opened chat still wins: a background
+        # bot's reply must not take the window.
+        if (live and live["path"] != chosen["path"]
+                and (live.get("stamp") or 0) > (chosen.get("stamp") or 0)
+                and _open_choice.get("selection") != chosen["agent_id"]):
+            return choose(live, "most recently active")
+        return choose(chosen, "opened file")
     if selection_id:
         chosen = _row_for(scoped, account, selection_id)
         if chosen is not None:
-            return chosen
+            return choose(chosen, "selection")
     selected = _roster_selected_id(slices, account, known)
     chosen = _row_for(scoped, account, selected) if selected else None
     if chosen is not None:
-        return chosen
+        _open_choice["selection"] = selected
+        return choose(chosen, "selection")
     if len(scoped) == 1:
-        return scoped[0]
-    return None
+        return choose(scoped[0], "only chat")
+    return choose(None, "uncertain")
 
 
 def latest_replay(lines):
@@ -1147,11 +1226,14 @@ def watch_snapshot(directory, window_titles=None, directories=None, seen=None, f
                 continue
             for keys, line in pairs[row["path"]]:
                 skipped.append((keys, "not the open chat", line))
+        _remember_open(names, followed, "kept")
         lines, bot_names, keylists, path = pack(followed)
         return lines, bot_names, keylists, path, skipped
     if len(fresh_rows) == 1:
+        _remember_open(names, fresh_rows[0], "most recently active")
         lines, bot_names, keylists, path = pack(fresh_rows[0])
         return lines, bot_names, keylists, path, []
+    _remember_open(names, None, "uncertain")
     skipped = []
     for row in fresh_rows:
         for keys, line in pairs[row["path"]]:

@@ -495,6 +495,122 @@ class StoreTests(unittest.TestCase):
             handle.write(payload)
         os.utime(path, (mtime, mtime))
 
+    def test_a_synced_open_does_not_hide_the_chat_that_just_replied(self):
+        """Another device rewrites an idle chat. This window is the one that just changed."""
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1600000000000,"message":{"type":"text","content":"cameron old"}}'
+                            ']}}')
+            selection = _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                              '{"schemaVersion":1,"value":{"selectedAgentId":"moya"}}')
+            os.utime(selection, (1_700_000_050, 1_700_000_050))
+            # Cameron's file jumped without a new message. That used to become "the open chat".
+            os.utime(cameron, (1_700_000_100, 1_700_000_100))
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            self._append_reply(
+                moya,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}},'
+                '{"kind":"send-message","id":"r-new","seq":2,"timestampMs":1700000200000,"message":{"type":"text","content":"moya just arrived"}}'
+                ']}}',
+                1_700_000_200)
+            lines, _names, _keys, active = grok_store.reply_snapshot(store)
+            self.assertIn("moya just arrived", " ".join(lines))
+            self.assertNotIn("cameron old", " ".join(lines))
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
+            self.assertIn("Moya", grok_store.open_chat_line())
+            self.assertIn("most recently active", grok_store.open_chat_line())
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(
+                store, seen=seen, follow_path=None)
+            self.assertEqual(path, active)
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertTrue(any("moya just arrived" in line for line in fresh), fresh)
+            self.assertFalse(any(reason == "not the open chat" and "moya just arrived" in line
+                                 for _keys, reason, line in skipped))
+            again = grok_store.open_chat_line()
+            grok_store.reply_snapshot(store)
+            self.assertEqual(grok_store.open_chat_line(), again)
+        finally:
+            shutil.rmtree(root)
+
+    def test_last_opened_from_another_device_does_not_hide_the_live_chat(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"cameron reply"}}'
+                            ']}}')
+            last = _blob(store, "sand.client.slice.account.a.ui.last-opened",
+                         '{"schemaVersion":1,"value":{"selectedAgentId":"cameron"}}')
+            os.utime(cameron, (1_700_000_010, 1_700_000_010))
+            os.utime(last, (1_700_000_020, 1_700_000_020))
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            self._append_reply(
+                moya,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}},'
+                '{"kind":"send-message","id":"r-new","seq":2,"timestampMs":1700000300000,"message":{"type":"text","content":"moya just arrived"}}'
+                ']}}',
+                1_700_000_300)
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(store, seen=seen, follow_path=None)
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertTrue(any("moya just arrived" in line for line in fresh), (fresh, skipped, grok_store.open_chat_line()))
+            self.assertFalse(any("moya just arrived" in line and reason == "not the open chat"
+                                 for _keys, reason, line in skipped))
+            self.assertTrue(path.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
+        finally:
+            shutil.rmtree(root)
+
+    def test_a_background_reply_stays_quiet_when_selection_names_the_open_chat(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000100000,"message":{"type":"text","content":"cameron background"}}'
+                            ']}}')
+            selection = _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                              '{"schemaVersion":1,"value":{"selectedAgentId":"moya"}}')
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            os.utime(selection, (1_700_000_010, 1_700_000_010))
+            os.utime(cameron, (1_700_000_100, 1_700_000_100))
+            watched, _names, _keys, active, skipped = grok_store.watch_snapshot(store, seen=set(), follow_path=None)
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"), grok_store.open_chat_line())
+            self.assertTrue(any(reason == "not the open chat" and "cameron background" in line
+                                for _keys, reason, line in skipped), skipped)
+            self.assertFalse(any("cameron background" in line for line in watched))
+        finally:
+            shutil.rmtree(root)
+
     def test_new_reply_is_spoken_when_the_open_chat_is_not_marked(self):
         """Mint regression: blobs update, but nothing is spoken and no speak line is logged.
 
