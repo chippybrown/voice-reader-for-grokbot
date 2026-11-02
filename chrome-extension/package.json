@@ -1,0 +1,10 @@
+{
+  "name": "grok-voice-reader-extension",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/logic.test.js test/extension.test.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.15.0"
+  }
+}

@@ -1,0 +1,190 @@
+// Decide which reply is new, wait until it stops changing, speak it once.
+// The DOM and speechSynthesis stay in content.js. This file only sees
+// { key, raw, speech } records in document order.
+(function (root) {
+  "use strict";
+
+  var GV = root.GrokVoice || (root.GrokVoice = {});
+
+  function continues(previous, next) {
+    if (!previous || !next) return false;
+    if (previous === next) return true;
+    // Short texts match too often ("Hi" / "Hi, the answer is...").
+    if (previous.length < 24) return false;
+    return next.indexOf(previous) === 0 || previous.indexOf(next) === 0;
+  }
+
+  function sameStream(pending, message) {
+    if (pending.key === message.key) return true;
+    var a = pending.raw || "";
+    var b = message.raw || "";
+    if (!a || !b) return false;
+    return b.indexOf(a) === 0 || a.indexOf(b) === 0;
+  }
+
+  GV.createSession = function createSession(options) {
+    var settleMs = options && options.settleMs > 0 ? options.settleMs : 1500;
+    var onSpeak = options && options.onSpeak ? options.onSpeak : function () {};
+    var enabled = true;
+    var armed = false;
+    var historical = new Set();
+    var baselineText = new Map();
+    var baselineSpeech = new Set();
+    var lastBaselineRaw = "";
+    var spoken = new Set();
+    var spokenKey = "";
+    var spokenRaw = "";
+    var lastSpoken = "";
+    var pending = null;
+    var timer = null;
+    var generation = 0;
+
+    function clearTimer() {
+      generation += 1;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }
+
+    function commit() {
+      if (!enabled || !pending) return;
+      var speech = String(pending.speech || "").trim();
+      var raw = pending.raw || "";
+      var key = pending.key;
+      pending = null;
+      if (!speech || spoken.has(speech)) return;
+      spoken.add(speech);
+      spokenKey = key;
+      spokenRaw = raw;
+      lastSpoken = speech;
+      onSpeak(speech);
+    }
+
+    // A reply that already went out, including one that kept growing after
+    // the first quiet gap, is not spoken again. Replay does not use this.
+    function alreadyCovered(message) {
+      var speech = String(message.speech || "").trim();
+      if (speech && spoken.has(speech)) return true;
+      if (spokenKey && message.key === spokenKey) return true;
+      var raw = String(message.raw || "");
+      if (spokenRaw && raw && spokenRaw.length >= 24 && raw.indexOf(spokenRaw) === 0) return true;
+      return false;
+    }
+
+    function restartTimer() {
+      var token = generation;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        if (token !== generation) return;
+        commit();
+      }, settleMs);
+    }
+
+    function isHistorical(message) {
+      var raw = message.raw || "";
+      var speech = message.speech || "";
+      if (historical.has(message.key)) {
+        var prev = baselineText.get(message.key) || "";
+        var recycled = prev && raw && !continues(prev, raw) && !baselineSpeech.has(speech);
+        if (!recycled) {
+          if (raw) baselineText.set(message.key, raw);
+          return true;
+        }
+        historical.delete(message.key);
+      }
+      if (speech && baselineSpeech.has(speech)) {
+        historical.add(message.key);
+        if (raw) baselineText.set(message.key, raw);
+        return true;
+      }
+      if (continues(lastBaselineRaw, raw)) {
+        historical.add(message.key);
+        baselineText.set(message.key, raw);
+        if (speech) baselineSpeech.add(speech);
+        if (raw.length >= lastBaselineRaw.length) lastBaselineRaw = raw;
+        return true;
+      }
+      return false;
+    }
+
+    function newestSpoken(messages) {
+      if (!messages) return null;
+      for (var i = messages.length - 1; i >= 0; i--) {
+        var message = messages[i];
+        if (message && message.key && message.raw && String(message.raw).trim()) return message;
+      }
+      return null;
+    }
+
+    return {
+      arm: function arm(messages) {
+        armed = true;
+        historical = new Set();
+        baselineText = new Map();
+        baselineSpeech = new Set();
+        lastBaselineRaw = "";
+        clearTimer();
+        pending = null;
+        var list = messages || [];
+        for (var i = 0; i < list.length; i++) {
+          var message = list[i];
+          if (!message || !message.key) continue;
+          historical.add(message.key);
+          var raw = message.raw || "";
+          baselineText.set(message.key, raw);
+          if (message.speech) baselineSpeech.add(message.speech);
+          if (raw) lastBaselineRaw = raw;
+        }
+      },
+
+      setEnabled: function setEnabled(value) {
+        enabled = Boolean(value);
+        if (!enabled) {
+          clearTimer();
+          pending = null;
+        }
+      },
+
+      isEnabled: function isEnabled() {
+        return enabled;
+      },
+
+      // messages: assistant replies in document order, oldest first.
+      watch: function watch(messages) {
+        if (!enabled || !armed) return;
+        var message = newestSpoken(messages);
+        if (!message || isHistorical(message) || alreadyCovered(message)) return;
+        var speech = String(message.speech || "").trim();
+        var raw = String(message.raw || "").replace(/\s+/g, " ").trim();
+        if (!speech) return;
+        if (spoken.has(speech)) return;
+        if (pending && !sameStream(pending, message)) commit();
+        if (pending && sameStream(pending, message)) {
+          if (pending.raw === raw) return;
+          pending = { key: message.key, raw: raw, speech: speech };
+          restartTimer();
+          return;
+        }
+        pending = { key: message.key, raw: raw, speech: speech };
+        restartTimer();
+      },
+
+      stop: function stop() {
+        clearTimer();
+        pending = null;
+      },
+
+      replay: function replay() {
+        if (!lastSpoken) return "";
+        onSpeak(lastSpoken);
+        return lastSpoken;
+      },
+
+      getLastSpoken: function getLastSpoken() {
+        return lastSpoken;
+      }
+    };
+  };
+})(globalThis);

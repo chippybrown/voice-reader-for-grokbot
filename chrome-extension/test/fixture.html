@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grok voice fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .gone { display: none; }
+    article { margin: 12px 0; padding: 8px 0; }
+    button { font: inherit; }
+  </style>
+</head>
+<body>
+  <main data-testid="conversation">
+    <article data-testid="user-message" data-message-id="old-user">
+      What was already asked?
+    </article>
+    <article data-testid="assistant-message" data-message-id="old-1">
+      <div class="response-content-markdown">This old answer should stay quiet.</div>
+    </article>
+    <article data-testid="assistant-message" data-message-id="hidden-1" hidden>
+      <div class="response-content-markdown">Hidden secret reply should not be spoken.</div>
+    </article>
+    <article data-testid="assistant-message" data-message-id="css-hidden-1" class="gone">
+      <div class="response-content-markdown">CSSHIDDEN reply should not be spoken.</div>
+    </article>
+    <article data-testid="assistant-message" data-message-id="aria-hidden-1" aria-hidden="true">
+      <div class="response-content-markdown">Aria hidden reply should not be spoken.</div>
+    </article>
+    <div id="live"></div>
+  </main>
+  <button id="stream" type="button">Stream a new reply</button>
+  <script>
+    function renderFinal(body) {
+      body.replaceChildren();
+      body.append("The newest answer is ready. See the ");
+      var link = document.createElement("a");
+      link.href = "https://example.com/secret-path";
+      link.textContent = "docs";
+      body.append(link);
+      body.append(" for more. **not stars** and a bare https://example.com/raw-url to skip. Also [notes](https://example.com/notes-url) please.");
+    }
+
+    function streamNewReply() {
+      var old = document.querySelector('[data-message-id="old-1"] .response-content-markdown');
+      if (old && old.textContent.indexOf("Still old") === -1) {
+        old.append(document.createTextNode(" Still old."));
+      }
+      var user = document.createElement("article");
+      user.setAttribute("data-testid", "user-message");
+      user.setAttribute("data-message-id", "new-user");
+      user.textContent = "Do not read this question.";
+      document.getElementById("live").before(user);
+
+      var article = document.createElement("article");
+      article.setAttribute("data-testid", "assistant-message");
+      article.setAttribute("data-message-id", "new-1");
+      var body = document.createElement("div");
+      body.className = "response-content-markdown";
+      article.append(body);
+      document.getElementById("live").append(article);
+
+      var plain = "The newest answer is ready. See the docs for more. **not stars** and a bare https://example.com/raw-url to skip. Also [notes](https://example.com/notes-url) please.";
+      var step = 18;
+      var cursor = 0;
+      return new Promise(function (resolve) {
+        function tick() {
+          cursor = Math.min(plain.length, cursor + step);
+          body.textContent = plain.slice(0, cursor);
+          if (cursor < plain.length) {
+            setTimeout(tick, 70);
+            return;
+          }
+          renderFinal(body);
+          resolve();
+        }
+        setTimeout(tick, 70);
+      });
+    }
+
+    document.getElementById("stream").addEventListener("click", function () {
+      streamNewReply();
+    });
+    window.streamNewReply = streamNewReply;
+  </script>
+</body>
+</html>
