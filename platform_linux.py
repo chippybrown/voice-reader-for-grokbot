@@ -7,6 +7,7 @@ import sys
 import threading
 
 import grok_store
+import hidden_process
 from audio_util import pitch_ratio, scale_wav_rate
 
 KEYRING_SERVICE = "grokbot-voice"
@@ -187,7 +188,7 @@ def sapi_speaking():
 
 def _is_tts_piper(path):
     try:
-        result = subprocess.run([path, "--help"], capture_output=True, text=True, timeout=8)
+        result = hidden_process.run([path, "--help"], capture_output=True, text=True, timeout=8)
     except (OSError, subprocess.TimeoutExpired):
         return False
     blob = ((result.stdout or "") + (result.stderr or "")).lower()
@@ -214,7 +215,7 @@ def synthesize(kind, ref, text, speed, pitch, dest):
             raise RuntimeError("Piper binary not found. Put it in %s" % piper_dir())
         ratio = pitch_ratio(pitch)
         length = ratio / max(0.3, float(speed))
-        subprocess.run(
+        hidden_process.run(
             [binary, "--model", grok_store.extended_path(ref), "--output_file", grok_store.extended_path(dest),
              "--length_scale", "%.4f" % length],
             input=text.encode("utf-8"),
@@ -228,7 +229,7 @@ def synthesize(kind, ref, text, speed, pitch, dest):
             raise RuntimeError("espeak-ng is not installed")
         wpm = max(80, min(450, int(round(175 * float(speed)))))
         espeak_pitch = max(0, min(99, int(round(50 + float(pitch) * 4))))
-        subprocess.run(
+        hidden_process.run(
             [binary, "-w", grok_store.extended_path(dest), "-s", str(wpm), "-p", str(espeak_pitch), "-v", str(ref)],
             input=text.encode("utf-8"),
             check=True,
@@ -287,10 +288,10 @@ class LinuxAudio:
         if not command:
             raise RuntimeError("Install paplay (pulseaudio-utils) or pw-play (pipewire)")
         if wait:
-            subprocess.run(command, check=False)
+            hidden_process.run(command, check=False)
             return
         with self._lock:
-            self.proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.proc = hidden_process.popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.sig_paused = False
 
     def pause(self):
@@ -341,7 +342,7 @@ def grok_window_titles():
     )
     for command in commands:
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=1)
+            result = hidden_process.run(command, capture_output=True, text=True, timeout=1)
         except (OSError, subprocess.TimeoutExpired):
             continue
         if result.returncode != 0:

@@ -109,7 +109,7 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 
 On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, per-bot voices, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
 
-The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.8**.
+The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.9**.
 
 ## Build from source
 

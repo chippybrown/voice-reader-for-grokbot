@@ -1,3 +1,3 @@
 # The app version. The toolbar, Settings, and the release workflow read this.
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 APP_TITLE = "Grokbot Voice v" + VERSION

@@ -8,6 +8,7 @@ import urllib.request
 import zipfile
 
 import grok_store
+import hidden_process
 import windows_launcher
 
 REPO = "chippybrown/voice-reader-for-grokbot"
@@ -377,13 +378,17 @@ def _spawn(popen, args, system):
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
-    if system == "win32":
-        # CREATE_NO_WINDOW, and not DETACHED_PROCESS. Detached drops the
-        # console flag and each console tool then opens a window of its own.
-        kwargs["creationflags"] = 0x00000200 | 0x08000000
+    windows = system == "win32"
+    if windows:
+        # A new process group. hidden_process adds CREATE_NO_WINDOW and SW_HIDE.
+        # DETACHED_PROCESS is not used: it lets each console tool open a window.
+        kwargs["creationflags"] = 0x00000200
     else:
         kwargs["start_new_session"] = True
-    return popen(args, **kwargs)
+    launch = popen or hidden_process.popen
+    if launch is not hidden_process.popen:
+        kwargs = hidden_process.hidden_kwargs(kwargs, windows=windows)
+    return launch(args, **kwargs)
 
 
 def apply(result, system, pid, executable, frozen, directory, urlopen, log_path, which=None, popen=None):
@@ -396,7 +401,7 @@ def apply(result, system, pid, executable, frozen, directory, urlopen, log_path,
     installer starts the app again.
     """
     which = which or shutil.which
-    popen = popen or subprocess.Popen
+    popen = popen or hidden_process.popen
     os.makedirs(directory, exist_ok=True)
     if system == "win32":
         exe_url = str((result or {}).get("windows_url") or "")
