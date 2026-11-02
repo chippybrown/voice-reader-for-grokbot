@@ -498,6 +498,69 @@
     return replies.length ? replies[replies.length - 1] : null;
   };
 
+  function elementFrom(node) {
+    if (!node) return null;
+    if (node.nodeType === 1) return node;
+    if (node.nodeType === 3 || node.nodeType === 8) return node.parentElement || null;
+    return null;
+  }
+
+  function inComposer(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return true;
+    if (el.isContentEditable) return true;
+    var role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "textbox" || role === "searchbox") return true;
+    try {
+      return Boolean(el.closest("textarea, input, select, [contenteditable='true'], [contenteditable='plaintext-only'], [role='textbox'], [role='searchbox']"));
+    } catch (err) {
+      return false;
+    }
+  }
+
+  // A user bubble's own edits are not a new assistant reply. A column that
+  // also holds other messages is not itself a user bubble.
+  function inUserBubble(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var node = el;
+    var guard = 0;
+    while (node && node.nodeType === 1 && guard < 12) {
+      if (node.tagName === "P" && (node.getAttribute("dir") || "").toLowerCase() === "auto") {
+        return classifyBubble(node).role === "user";
+      }
+      node = node.parentElement;
+      guard += 1;
+    }
+    if (!el.querySelectorAll) return false;
+    var paras = [];
+    try {
+      paras = el.querySelectorAll('p[dir="auto"]');
+    } catch (err) {
+      return false;
+    }
+    if (paras.length !== 1) return false;
+    return classifyBubble(paras[0]).role === "user";
+  }
+
+  // Typing in the composer, or a change inside a user bubble, is not a new reply.
+  GV.ignoreMutation = function ignoreMutation(record) {
+    if (!record) return false;
+    var nodes = [record.target];
+    var added = record.addedNodes;
+    if (added) {
+      for (var i = 0; i < added.length; i++) nodes.push(added[i]);
+    }
+    var saw = false;
+    for (var n = 0; n < nodes.length; n++) {
+      var el = elementFrom(nodes[n]);
+      if (!el) continue;
+      saw = true;
+      if (!inComposer(el) && !inUserBubble(el)) return false;
+    }
+    return saw;
+  };
+
   GV.elementPath = function elementPath(el) {
     var parts = [];
     var node = el;

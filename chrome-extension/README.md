@@ -1,12 +1,12 @@
 # Grok Voice Reader
 
-A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.1.4**. The popup shows that number next to the title.
+A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.1.5**. The popup shows that number next to the title.
 
 You need Chrome or Edge, and a speech voice already installed on the computer. Chrome and Edge use the voices that come with Windows or macOS.
 
 ## Download
 
-1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.4/Grok-Voice-Reader-Extension.zip).
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.4/Grok-Voice-Reader-Extension.zip). The published zip is still 0.1.4. This folder is 0.1.5 and is not in that zip yet.
 2. Unzip it. On Windows, right-click the zip and choose **Extract All**. On a Mac, double-click the zip.
 3. Put the unzipped folder somewhere you will not delete, such as **Documents**. The folder must contain a file named `manifest.json`.
 
@@ -72,4 +72,4 @@ npm install
 npm test
 ```
 
-URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.4`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.
+URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.5`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.
