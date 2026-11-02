@@ -137,6 +137,11 @@ def main():
             if time.time() >= next_reply:
                 number += 1
                 replies.append(("n%d" % number, "reply %d" % number))
+                # Two replies saved into the same file while the previous line
+                # is still the one a listener would be stepping through.
+                if number == 2:
+                    number += 1
+                    replies.append(("n%d" % number, "reply %d" % number))
                 # Partial write, then the real atomic replace, the way a save races a reader.
                 partial = path + ".partial"
                 with open(grok_store.extended_path(partial), "w", encoding="utf-8") as handle:

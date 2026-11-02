@@ -1143,7 +1143,8 @@ def unseen_lines(seen, lines, keylists):
     """Lines whose message id or content hash has not been seen yet.
 
     Matching keys are recorded. A later rewrite that only changes seq or
-    order does not come back as a new reply.
+    order does not come back as a new reply. Two new replies in one file
+    are both returned, in order.
     """
     fresh = []
     for line, keys in zip(lines, keylists):
@@ -1152,6 +1153,33 @@ def unseen_lines(seen, lines, keylists):
             continue
         seen.update(keys)
         fresh.append(line)
+    return fresh
+
+
+def hold_open_file(previous, exists, active, misses):
+    """Keep the open chat while its blob is deleted and renamed back.
+
+    Grok Bot removes the file, then renames the new one into place. One poll
+    can see it missing. Forgetting the chat at that moment marks every reply
+    in the replacement, including the ones that just arrived, as already read.
+    Returns (file to keep or None, miss count).
+    """
+    if not previous or exists or active == previous:
+        return previous, 0
+    misses = int(misses or 0) + 1
+    if misses >= 3:
+        return None, 0
+    return previous, misses
+
+
+def merge_open_replies(history, seen, lines, keylists):
+    """Append every new reply in the open chat, in order.
+
+    A second reply written into the same file is not dropped because the
+    first one was new too. Returns the lines that were added.
+    """
+    fresh = unseen_lines(seen, lines, keylists)
+    history.extend(fresh)
     return fresh
 
 

@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 import tkinter as tk
+import urllib.error
 import urllib.request
 
 # A windowed build has no console. The starter's process launch can leave
@@ -29,6 +30,7 @@ else:
 import bot_prefs
 import grok_store
 import piper_setup
+import xai_tts
 import single_instance
 import updates
 import window_layout
@@ -80,14 +82,22 @@ if not choices:
     choices.append(("English (espeak-ng)", "espeak", "en"))
 
 def grok_audio(text, voice_id, speed):
-    """Ask xAI's speech service for 24 kHz 16-bit PCM in the given voice."""
-    body = json.dumps({"text": text, "voice_id": voice_id, "language": "auto",
-                       "speed": max(0.7, min(1.5, speed)),
-                       "output_format": {"codec": "pcm", "sample_rate": 24000}}).encode()
-    req = urllib.request.Request("https://api.x.ai/v1/tts", data=body, method="POST", headers={
+    """Ask xAI's speech service for 16-bit PCM in the given voice."""
+    body = json.dumps(xai_tts.payload(text, voice_id, speed)).encode("utf-8")
+    req = urllib.request.Request(xai_tts.ENDPOINT, data=body, method="POST", headers={
         "Authorization": "Bearer " + platform.load_key(), "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as response:
-        return response.read()
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            payload = response.read()
+            kind = response.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        detail = b""
+        try:
+            detail = exc.read()
+        except Exception:
+            detail = b""
+        raise RuntimeError(xai_tts.error_log(exc.code, detail))
+    return xai_tts.pcm_bytes(payload, kind)
 
 speak_state = {"kind": "sapi", "ref": 0, "token": 0, "busy_until": 0.0, "making": False}
 
@@ -213,7 +223,11 @@ def piper_job(text, token, wait):
                 platform.audio.play(wait)
                 return
             except Exception as exc:
-                log("Grok voice problem, using a local voice: %r" % (exc,))
+                message = str(exc)
+                if message.startswith("Grok voice problem"):
+                    log(message)
+                else:
+                    log("Grok voice problem, using a local voice: %r" % (exc,))
                 kind, ref = fallback_local()
                 if kind is None:
                     return
@@ -1008,6 +1022,13 @@ def _tick():
             state["file_key"] = None
             state["pos"] = None
             return bool(cur)
+        # Same file. A reply that landed while Back or Forward was playing
+        # still belongs in history, behind the line being reviewed.
+        fresh = grok_store.merge_open_replies(state["history"], state["seen"], cur, keys)
+        for line in fresh:
+            if line not in state["queue"]:
+                state["queue"].append(line)
+        state["prev_cur"] = list(cur)
         return True
 
     manual = None
@@ -1035,8 +1056,12 @@ def _tick():
             history = state["history"]
             if history:
                 state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
+                waiting = list(state["queue"])
                 state["queue"].clear()
                 say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]), replay=True)
+                for line in waiting:
+                    if line != history[state["pos"]]:
+                        state["queue"].append(line)
             else:
                 say("")
     if flags["skip"]:   # Next
@@ -1094,11 +1119,8 @@ def _tick():
                 # A different chat that is still on disk replaces history and
                 # is not read aloud. The same file, or the first file we can
                 # lock onto, speaks replies that arrived after launch.
+                state["missing"] = 0
                 previous = state.get("file_key")
-                if previous and not os.path.exists(grok_store.extended_path(previous)):
-                    previous = None
-                    state["history"] = []
-                    state["file_key"] = None
                 moved = previous and active != previous
                 if moved:
                     state["file_key"] = active
@@ -1108,18 +1130,21 @@ def _tick():
                     state["queue"].clear()
                     state["pos"] = None
                 else:
-                    fresh = grok_store.unseen_lines(seen, cur, keys)
                     if not state.get("file_key"):
+                        grok_store.mark_seen(seen, keys)
                         state["history"] = list(cur)
                         state["prev_cur"] = list(cur)
                         state["pos"] = None
+                        fresh = []
                     else:
-                        for line in fresh:
-                            state["history"].append(line)
-                            state["pos"] = None
+                        # Leave pos alone. Forward is walking history and must
+                        # still be able to reach a reply that arrived mid-playback.
+                        fresh = grok_store.merge_open_replies(state["history"], seen, cur, keys)
+                        state["prev_cur"] = list(cur)
                     state["file_key"] = active
                     for line in fresh:
-                        state["queue"].append(line)
+                        if line not in state["queue"]:
+                            state["queue"].append(line)
             elif cur:
                 known = [i for i, reply in enumerate(cur) if reply in seen]
                 prev = state.get("prev_cur", [])
@@ -1165,7 +1190,13 @@ def _tick():
                         state["pos"] = None
                         state["queue"].append(reply)
             elif state.get("file_key") and not os.path.exists(grok_store.extended_path(state["file_key"])):
-                state["file_key"] = None
+                # The blob is deleted for a moment during a save. Keep the chat
+                # so the replacement's new replies are not marked already read.
+                kept, state["missing"] = grok_store.hold_open_file(
+                    state["file_key"], False, active, state.get("missing"))
+                if kept is None:
+                    state["history"] = []
+                    state["file_key"] = None
         except Exception as exc:
             message = repr(exc)
             if state.get("watch_error") != message:
