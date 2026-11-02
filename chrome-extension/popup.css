@@ -5,7 +5,7 @@
 }
 
 body {
-  width: 280px;
+  width: 320px;
   margin: 0;
   padding: 14px 14px 16px;
   color: #1c2421;
@@ -19,9 +19,11 @@ h1 {
 }
 
 #status {
-  min-height: 2.4em;
+  min-height: 4.2em;
   margin: 6px 0 12px;
   color: #3d4a44;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 label {

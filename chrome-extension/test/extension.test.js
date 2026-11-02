@@ -151,7 +151,78 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
     assert.equal(outlined.includes("The newest answer is ready"), true);
     assert.equal(outlined.includes("Do not read"), false);
     assert.equal(outlined.includes("Moya"), false);
-    assert.equal(logs.some((line) => line.includes("[Grok Voice Reader] latest assistant reply:")), true);
+    assert.equal(logs.some((line) => line.indexOf("[GrokVoice] blocks=") !== -1), true);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+const latePage = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Late chat</title></head>
+<body>
+  <p id="waiting">Chat is not mounted yet.</p>
+  <script>
+    window.mountLateChat = function () {
+      var thread = document.createElement("div");
+      thread.id = "late-thread";
+      thread.style.cssText = "overflow-y:auto;height:420px;display:flex;flex-direction:column;gap:12px";
+      document.body.appendChild(thread);
+      function add(text, user) {
+        var turn = document.createElement("div");
+        turn.style.display = "flex";
+        turn.style.justifyContent = user ? "flex-end" : "flex-start";
+        var pad = document.createElement("div");
+        pad.style.background = user ? "#6d28d9" : "#2b2e36";
+        pad.style.color = "#fff";
+        pad.style.borderRadius = "16px";
+        pad.style.padding = "10px 14px";
+        pad.style.maxWidth = "75%";
+        var paragraph = document.createElement("p");
+        paragraph.dir = "auto";
+        paragraph.className = "break-words last:mb-0 streamdown-first-block:mt-0";
+        paragraph.style.whiteSpace = "pre-wrap";
+        paragraph.textContent = text;
+        pad.appendChild(paragraph);
+        turn.appendChild(pad);
+        thread.appendChild(turn);
+      }
+      add("First late reply should stay quiet.", false);
+      add("A question from the person.", true);
+      add("The newest late reply should be spoken.", false);
+    };
+  </script>
+</body></html>`;
+
+test("a chat container inserted after startup is read", { timeout: 30000 }, async () => {
+  const { browser } = await launch();
+  try {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (request.url().startsWith("https://grok.com/")) {
+        request.respond({
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: latePage
+        }).catch(() => {});
+        return;
+      }
+      request.continue().catch(() => {});
+    });
+    await page.goto("https://grok.com/late-chat", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("html[data-grok-voice-armed='1']", { timeout: 10000 });
+    const world = await contentWorld(page);
+    await stubSpeech(world);
+    await page.evaluate(() => window.mountLateChat());
+    const spoken = await waitForSpoken(world);
+    assert.deepEqual(spoken, ["The newest late reply should be spoken."]);
+    const detected = await page.$eval("html", (el) => ({
+      count: el.getAttribute("data-grok-voice-detected"),
+      snippet: el.getAttribute("data-grok-voice-snippet")
+    }));
+    assert.equal(detected.count, "2");
+    assert.equal(detected.snippet.includes("The newest late reply"), true);
+    assert.equal(detected.snippet.includes("First late reply"), false);
   } finally {
     await browser.close().catch(() => {});
   }

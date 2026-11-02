@@ -263,12 +263,15 @@
     return rightGap + 16 < leftGap && box.width < frame.width * 0.92;
   }
 
-  function isUserStyled(el, container) {
-    var node = el;
-    var guard = 0;
-    while (node && node.nodeType === 1 && guard < 12) {
-      guard += 1;
-      if (container && node === container) break;
+  function isUserBubble(bubble) {
+    var node = bubble;
+    var depth = 0;
+    while (node && node.nodeType === 1 && depth < 3) {
+      depth += 1;
+      if (node === node.ownerDocument.body || node === node.ownerDocument.documentElement) break;
+      // A column that stacks several replies is the chat, not a user bubble,
+      // even when it uses justify-content: flex-end to pin messages down.
+      if (depth > 1 && separatesIntoDistinctMessages(node)) break;
       var role = attrRole(node);
       if (role === "user") return true;
       if (role === "assistant") return false;
@@ -278,10 +281,34 @@
         if (justify === "flex-end" || justify === "end" || style.alignSelf === "flex-end") return true;
         if (isPurple(style.backgroundColor)) return true;
       }
-      if (pushedToEnd(node, container)) return true;
+      if (node.parentElement && pushedToEnd(node, node.parentElement)) return true;
       node = node.parentElement;
     }
     return false;
+  }
+
+  function nearestBubble(paragraph) {
+    var node = paragraph;
+    var shaded = null;
+    var doc = paragraph.ownerDocument;
+    var guard = 0;
+    while (node.parentElement && guard < 30) {
+      guard += 1;
+      var parent = node.parentElement;
+      if (parent === doc.body || parent === doc.documentElement) break;
+      if (boundaryParent(parent, node) || separatesIntoDistinctMessages(parent)) break;
+      node = parent;
+      if (!shaded && hasOwnBackground(node)) shaded = node;
+    }
+    if (shaded && shaded.contains(paragraph)) return shaded;
+    return node;
+  }
+
+  function hasOwnBackground(el) {
+    var style = styleOf(el);
+    if (!style) return false;
+    var parsed = parseRgb(style.backgroundColor);
+    return Boolean(parsed && parsed.a !== 0);
   }
 
   function includeBlock(el, row) {
@@ -324,112 +351,51 @@
     return parts.join(" ");
   };
 
-  function streamdownParagraphs(rootNode) {
-    var found = [];
-    var elements = deepElements(rootNode);
-    for (var i = 0; i < elements.length; i++) {
-      var el = elements[i];
-      if (isStreamdownParagraph(el) && !ignored(el)) found.push(el);
-    }
-    return found;
-  }
-
-  function textBetween(before, after) {
+  function collectStreamdownParagraphs(rootNode, found) {
+    if (!rootNode || !rootNode.querySelectorAll) return;
+    var nodes = [];
     try {
-      var range = before.ownerDocument.createRange();
-      range.setStartAfter(before);
-      range.setEndBefore(after);
-      return range.toString();
+      nodes = rootNode.querySelectorAll('p[dir="auto"][class*="streamdown"]');
     } catch (err) {
-      return "";
+      nodes = [];
+    }
+    var i;
+    for (i = 0; i < nodes.length; i++) {
+      if (!ignored(nodes[i]) && GV.visibleRaw(nodes[i])) found.push(nodes[i]);
+    }
+    var all = rootNode.querySelectorAll("*");
+    for (i = 0; i < all.length; i++) {
+      if (all[i].shadowRoot) collectStreamdownParagraphs(all[i].shadowRoot, found);
     }
   }
 
-  // Paragraphs are in document order. A "Message from …" row between two
-  // bubbles starts a new message even if they share a wrapper.
-  function clusterParagraphs(paragraphs, list) {
-    var clusters = [];
-    for (var i = 0; i < paragraphs.length; i++) {
-      var paragraph = paragraphs[i];
-      var previous = clusters.length ? clusters[clusters.length - 1] : null;
-      var lastParagraph = previous ? previous.paragraphs[previous.paragraphs.length - 1] : null;
-      var split = !previous || /Message from\b/i.test(textBetween(lastParagraph, paragraph));
-      if (!split) {
-        var left = messageRowOf(lastParagraph, list);
-        var right = messageRowOf(paragraph, list);
-        if (left !== right && !left.contains(paragraph) && !right.contains(lastParagraph)) split = true;
-      }
-      if (split) clusters.push({ paragraphs: [paragraph] });
-      else previous.paragraphs.push(paragraph);
-    }
-    return clusters;
-  }
-
-  function speechOfCluster(paragraphs) {
-    var wanted = new Set();
-    var boxes = [];
+  // Every Streamdown paragraph in the document, grouped by its nearest bubble.
+  // The last group is the bottom-most assistant reply. Recomputed from scratch.
+  GV.inspectAssistant = function inspectAssistant(doc) {
+    var body = doc.body || doc.documentElement;
+    var empty = { blockCount: 0, replies: [] };
+    if (!body) return empty;
+    var paragraphs = [];
+    collectStreamdownParagraphs(body, paragraphs);
+    var order = [];
+    var grouped = new Map();
     var i;
     for (i = 0; i < paragraphs.length; i++) {
-      wanted.add(paragraphs[i]);
-      var box = markdownBox(paragraphs[i]);
-      if (boxes.indexOf(box) === -1) boxes.push(box);
-    }
-    var parts = [];
-    for (i = 0; i < boxes.length; i++) {
-      var nodes = boxes[i].querySelectorAll("p, ul, ol, pre, blockquote, h1, h2, h3, h4, h5, h6, table");
-      var blocks = [];
-      var n;
-      for (n = 0; n < nodes.length; n++) {
-        var el = nodes[n];
-        if (el.tagName === "P") {
-          if (!wanted.has(el)) continue;
-        } else if (!EXTRA_TAG[el.tagName] || ignored(el)) continue;
-        var nested = false;
-        var j;
-        for (j = 0; j < blocks.length; j++) {
-          if (blocks[j].contains(el)) nested = true;
-        }
-        if (nested) continue;
-        blocks = blocks.filter(function (other) { return !el.contains(other); });
-        blocks.push(el);
+      var bubble = nearestBubble(paragraphs[i]);
+      if (!bubble || isUserBubble(bubble)) continue;
+      if (!grouped.has(bubble)) {
+        grouped.set(bubble, []);
+        order.push(bubble);
       }
-      for (n = 0; n < blocks.length; n++) {
-        var text = GV.visibleSpeech(blocks[n]);
-        if (text) parts.push(text);
-      }
+      grouped.get(bubble).push(paragraphs[i]);
     }
-    return parts.join(" ");
-  }
-
-  // Replies in document order, top to bottom. The last entry is the one to read.
-  // Nothing here is cached: callers resolve it again after every mutation.
-  GV.detectAssistantReplies = function detectAssistantReplies(doc) {
-    var body = doc.body || doc.documentElement;
-    if (!body) return [];
-    var list = findMessageList(doc);
-    var all = streamdownParagraphs(body);
-    var paragraphs = all;
-    if (list) {
-      var inside = [];
-      for (var n = 0; n < all.length; n++) {
-        if (list.contains(all[n])) inside.push(all[n]);
-      }
-      if (inside.length && inside.length === all.length) paragraphs = inside;
-    }
-    var kept = [];
-    for (var i = 0; i < paragraphs.length; i++) {
-      if (!isUserStyled(paragraphs[i], list || body)) kept.push(paragraphs[i]);
-    }
-    var clusters = clusterParagraphs(kept, list);
     var replies = [];
-    for (i = 0; i < clusters.length; i++) {
-      var group = clusters[i].paragraphs;
-      var speech = speechOfCluster(group);
+    for (i = 0; i < order.length; i++) {
+      var speech = GV.replySpeech(order[i]);
       if (!speech) continue;
-      var box = markdownBox(group[0]);
       replies.push({
-        element: box,
-        body: box,
+        element: order[i],
+        body: order[i],
         speech: speech,
         raw: speech
       });
@@ -441,7 +407,11 @@
       if (pos & 2) return 1;
       return 0;
     });
-    return replies;
+    return { blockCount: paragraphs.length, replies: replies };
+  };
+
+  GV.detectAssistantReplies = function detectAssistantReplies(doc) {
+    return GV.inspectAssistant(doc).replies;
   };
 
   GV.latestAssistantReply = function latestAssistantReply(doc) {

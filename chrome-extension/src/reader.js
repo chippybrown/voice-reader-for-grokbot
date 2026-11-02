@@ -136,22 +136,25 @@
 
       // messages: assistant replies in document order, oldest first.
       watch: function watch(messages) {
-        if (!enabled || !armed) return;
+        if (!enabled || !armed) return "not-armed";
         var message = newestSpoken(messages);
-        if (!message || isHistorical(message) || alreadyCovered(message)) return;
+        if (!message) return "no-latest";
+        if (isHistorical(message)) return "historical";
+        if (alreadyCovered(message)) return "already-spoken";
         var speech = String(message.speech || "").trim();
         var raw = String(message.raw || "").replace(/\s+/g, " ").trim();
-        if (!speech) return;
-        if (spoken.has(speech)) return;
+        if (!speech) return "empty";
+        if (spoken.has(speech)) return "already-spoken";
         if (pending && !sameStream(pending, message)) commit();
         if (pending && sameStream(pending, message)) {
-          if (pending.raw === raw) return;
+          if (pending.raw === raw) return "waiting";
           pending = { key: message.key, raw: raw, speech: speech };
           restartTimer();
-          return;
+          return "waiting";
         }
         pending = { key: message.key, raw: raw, speech: speech };
         restartTimer();
+        return "waiting";
       },
 
       stop: function stop() {

@@ -65,6 +65,18 @@
     });
   }
 
+  function detectedLine(response) {
+    var count = Number(response.detected);
+    if (!isFinite(count)) count = 0;
+    var line = count === 1 ? "1 reply detected." : count + " replies detected.";
+    if (response.snippet) line += " Last: " + response.snippet;
+    if (response.reason === "no-streamdown-blocks") line += " No Streamdown text found.";
+    else if (response.reason === "historical") line += " Already on the page.";
+    else if (response.reason === "waiting") line += " Waiting until it settles.";
+    else if (response.reason === "spoke" || response.reason === "already-spoken") line += " Spoken.";
+    return line;
+  }
+
   function refreshStatus() {
     send("status").then(function (result) {
       var tab = result.tab;
@@ -78,8 +90,8 @@
         setStatus("This tab is not a Grok chat.");
         return;
       }
-      if (response.enabled) setStatus("On. A reply already on the page stays quiet.");
-      else setStatus("Off. New replies stay quiet.");
+      var prefix = response.enabled ? "On. " : "Off. ";
+      setStatus(prefix + detectedLine(response));
     });
   }
 

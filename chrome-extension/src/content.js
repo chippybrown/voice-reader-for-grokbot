@@ -67,6 +67,9 @@
   function speakAloud(text) {
     if (!text) return;
     queuedSpeech = text;
+    lastDetect.reason = "spoke";
+    lastDetect.snippet = snippetOf(text);
+    logResolve();
     attemptSpeak(text);
   }
 
@@ -145,14 +148,49 @@
     debugEl = null;
   }
 
+  var lastDetect = { blocks: 0, groups: 0, snippet: "", reason: "starting" };
+
+  function snippetOf(text) {
+    text = String(text || "").replace(/\s+/g, " ").trim();
+    if (text.length <= 60) return text;
+    return text.slice(0, 60);
+  }
+
+  function logResolve() {
+    if (!debug) return;
+    try {
+      console.log(
+        "[GrokVoice] blocks=" + lastDetect.blocks +
+        " groups=" + lastDetect.groups +
+        " chosen=\"" + lastDetect.snippet + "\"" +
+        " skip=" + lastDetect.reason
+      );
+    } catch (err) {
+      // Logging is only a debugging aid.
+    }
+  }
+
+  function publishDetect(report, reason) {
+    var replies = report.replies || [];
+    var latest = replies.length ? replies[replies.length - 1] : null;
+    lastDetect.blocks = report.blockCount || 0;
+    lastDetect.groups = replies.length;
+    lastDetect.snippet = snippetOf(latest ? latest.speech : "");
+    lastDetect.reason = reason;
+    var rootNode = document.documentElement;
+    if (rootNode) {
+      rootNode.setAttribute("data-grok-voice-detected", String(replies.length));
+      rootNode.setAttribute("data-grok-voice-snippet", lastDetect.snippet);
+    }
+    logResolve();
+  }
+
   function updateDebug(replies) {
     if (!debug) {
       if (debugEl) clearDebug();
       return;
     }
     ensureDebugStyle();
-    // Always the bottom-most assistant body from this scan. Never reuse the
-    // first bubble found on an earlier pass.
     var latest = replies.length ? replies[replies.length - 1] : null;
     var target = latest ? (latest.body || latest.element) : null;
     if (!target || target.isConnected === false) {
@@ -163,34 +201,31 @@
     clearDebug();
     debugEl = target;
     target.classList.add(DEBUG_CLASS);
-    try {
-      console.info("[Grok Voice Reader] latest assistant reply:", GV.elementPath(target));
-    } catch (err) {
-      // Logging is only a debugging aid.
-    }
-  }
-
-  function currentReplies() {
-    return GV.detectAssistantReplies(document);
   }
 
   function applyEnabled(on) {
     session.setEnabled(on);
     if (on) {
-      session.arm(recordsFrom(currentReplies()));
+      session.arm(recordsFrom(GV.detectAssistantReplies(document)));
       markArmed(true);
     } else {
       stopSpeaking();
       markArmed(false);
     }
     safeSend({ type: "watch-state", enabled: Boolean(on) });
+    scheduleScan();
   }
 
   function scan() {
-    var replies = currentReplies();
+    var report = GV.inspectAssistant(document);
+    var replies = report.replies || [];
     updateDebug(replies);
-    if (!session.isEnabled()) return;
-    session.watch(recordsFrom(replies));
+    var reason = "disabled";
+    if (!session.isEnabled()) reason = "disabled";
+    else if (!report.blockCount) reason = "no-streamdown-blocks";
+    else if (!replies.length) reason = "no-assistant-groups";
+    else reason = session.watch(recordsFrom(replies)) || "waiting";
+    publishDetect(report, reason);
   }
 
   function scheduleScan() {
@@ -222,16 +257,33 @@
     return {
       subtree: true,
       childList: true,
-      characterData: true,
-      attributes: true
+      characterData: true
     };
   }
 
   function startObserver() {
-    if (observer || !document.documentElement) return;
-    observer = new MutationObserver(scheduleScan);
-    observer.observe(document.documentElement, observeOptions());
-    watchShadows(document);
+    if (observer) return;
+    observer = new MutationObserver(function () {
+      bindObserver();
+      scheduleScan();
+    });
+    bindObserver();
+  }
+
+  var observedRoot = null;
+
+  function bindObserver() {
+    var target = document.body || document.documentElement;
+    if (!target || observedRoot === target) {
+      watchShadows(document.body || document);
+      return;
+    }
+    observer.observe(target, observeOptions());
+    if (document.documentElement && document.documentElement !== target) {
+      observer.observe(document.documentElement, { childList: true, subtree: false });
+    }
+    observedRoot = target;
+    watchShadows(target);
   }
 
   chrome.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
@@ -251,7 +303,11 @@
         ok: true,
         enabled: session.isEnabled(),
         armed: document.documentElement.getAttribute("data-grok-voice-armed") === "1",
-        last: session.getLastSpoken()
+        last: session.getLastSpoken(),
+        detected: lastDetect.groups,
+        blocks: lastDetect.blocks,
+        snippet: lastDetect.snippet,
+        reason: lastDetect.reason
       });
     }
   });

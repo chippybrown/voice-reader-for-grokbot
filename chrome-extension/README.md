@@ -17,7 +17,7 @@ Speech uses the browser's built-in `speechSynthesis`. The computer needs a voice
 
 The toolbar icon shows **ON** when the switch is on and the active tab is a Grok page, including `https://grok.com/bot/<id>`. Open the icon for the switch, **Show what it detects**, voice, rate, **Stop**, and **Replay last**. Those choices are kept in `chrome.storage`.
 
-**Show what it detects** outlines the latest assistant bubble in green and prints its element path in the page console, prefixed with `[Grok Voice Reader]`. Turn it off to clear the outline.
+**Show what it detects** outlines the bottom-most assistant body in green. With that on, the page console logs `[GrokVoice]` after each look: how many Streamdown blocks were found, how many groups, the first 60 characters chosen, and why speech was skipped or started. The popup status shows the same count and snippet.
 
 After you reload the extension, reload the Grok tab too. Chrome does not reinject a content script into a tab that is already open. The badge can show **ON** from the address alone before that reload. If the popup says to reload the tab, do that. A missing content script is ignored instead of logging a connection error.
 
