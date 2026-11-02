@@ -6,7 +6,7 @@ You need Chrome or Edge, and a speech voice already installed on the computer. C
 
 ## Download
 
-1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.4/Grok-Voice-Reader-Extension.zip). The published zip is still 0.1.4. This folder is 0.1.5 and is not in that zip yet.
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.5/Grok-Voice-Reader-Extension.zip).
 2. Unzip it. On Windows, right-click the zip and choose **Extract All**. On a Mac, double-click the zip.
 3. Put the unzipped folder somewhere you will not delete, such as **Documents**. The folder must contain a file named `manifest.json`.
 

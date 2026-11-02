@@ -4,7 +4,7 @@
 
 If you read Grok in the browser, including a Grok Bot chat at grok.com/bot, use the browser extension. It reads each new reply aloud in that tab.
 
-Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.4/Grok-Voice-Reader-Extension.zip), unzip it into a folder you will keep (for example Documents), then load that folder in Chrome or Edge. The click-by-click steps, including how to pin it, pick a voice, and update it, are in [chrome-extension/README.md](chrome-extension/README.md).
+Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.5/Grok-Voice-Reader-Extension.zip), unzip it into a folder you will keep (for example Documents), then load that folder in Chrome or Edge. The click-by-click steps, including how to pin it, pick a voice, and update it, are in [chrome-extension/README.md](chrome-extension/README.md).
 
 The desktop app below is for the Grok Bot desktop app on Windows and Linux Mint.
 
