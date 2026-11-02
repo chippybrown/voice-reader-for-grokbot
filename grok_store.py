@@ -838,21 +838,15 @@ def latest_replay(lines):
     return lines[-1]
 
 
-def reply_snapshot(directory, window_titles=None, directories=None):
-    """(lines, bot names, key lists, active file) for the open chat.
+def _bot_names(names, bot):
+    labels = list(names.values())
+    if bot:
+        labels.append(bot)
+    return sorted(set(labels), key=len, reverse=True)
 
-    key lists identify replies without using their position. active file is
-    the transcript path, or None when there is no chat to follow.
-    window_titles are ignored. Every call re-reads the stores. None for the
-    active file means the open chat is not known, so nothing should be spoken.
-    """
-    folders = _store_list(directory, directories)
-    names = {}
-    for folder in folders:
-        names.update(roster_names(folder))
-    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
-    if transcript is None:
-        return [], sorted(names.values(), key=len, reverse=True), [], None
+
+def _speech_lines(transcript, names):
+    """(lines, key lists, bot) for one saved transcript."""
     agent_id = transcript["agent_id"]
     bot = plain_label(names.get(agent_id) or "") or "Bot"
     lines = []
@@ -871,8 +865,36 @@ def reply_snapshot(directory, window_titles=None, directories=None):
         clock = _clock(entry.get("timestampMs")) or "12:00:00 PM"
         lines.append("%s %s #%s %s" % (bot, clock, seq, text))
         keylists.append(entry_keys(entry, bot, text))
-    bot_names = sorted(set(list(names.values()) + [bot]), key=len, reverse=True)
-    return lines, bot_names, keylists, transcript["path"]
+    return lines, keylists, bot
+
+
+def _unseen_pairs(seen, lines, keylists):
+    found = []
+    for line, keys in zip(lines, keylists):
+        if any(key in seen for key in keys):
+            continue
+        found.append((keys, line))
+    return found
+
+
+def reply_snapshot(directory, window_titles=None, directories=None):
+    """(lines, bot names, key lists, active file) for the open chat.
+
+    key lists identify replies without using their position. active file is
+    the transcript path, or None when there is no chat to follow.
+    window_titles are ignored. Every call re-reads the stores. None for the
+    active file means the open chat is not known, so Back stays quiet.
+    The watcher uses watch_snapshot, which can still speak one new reply.
+    """
+    folders = _store_list(directory, directories)
+    names = {}
+    for folder in folders:
+        names.update(roster_names(folder))
+    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
+    if transcript is None:
+        return [], _bot_names(names, ""), [], None
+    lines, keylists, bot = _speech_lines(transcript, names)
+    return lines, _bot_names(names, bot), keylists, transcript["path"]
 
 
 def reply_lines(directory):
@@ -912,3 +934,86 @@ def unseen_lines(seen, lines, keylists):
         seen.update(keys)
         fresh.append(line)
     return fresh
+
+
+def every_reply_keylists(directory, directories=None):
+    """Keys for every reply already on disk. Launch treats them as history."""
+    _slices, rows, names = _load_stores(_store_list(directory, directories))
+    keylists = []
+    for row in rows:
+        _lines, keys, _bot = _speech_lines(row, names)
+        keylists.extend(keys)
+    return keylists
+
+
+def skip_log(reason, preview=""):
+    """Debug line for a new reply that was not spoken."""
+    text = "skip new reply: %s" % reason
+    preview = " ".join(str(preview or "").split())
+    if preview:
+        text += " | " + preview[:80]
+    return text
+
+
+def watch_snapshot(directory, window_titles=None, directories=None, seen=None, follow_path=None):
+    """(lines, bot names, key lists, path, skipped) for automatic reading.
+
+    skipped is a list of (keys, reason, preview) for new replies left unspoken.
+
+    A known open chat wins. When the files no longer say which chat is on
+    screen, keep follow_path so a reply in the chat already being read is
+    still spoken. That happens when a reply lands: the file time matches the
+    new message, so the 'just opened' signal goes away. With no chat to keep,
+    one transcript that gained a reply is spoken. Several new replies and no
+    open chat stay quiet, and each one is listed in skipped.
+    """
+    seen = seen if seen is not None else set()
+    folders = _store_list(directory, directories)
+    _slices, rows, names = _load_stores(folders)
+    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
+
+    def pack(row):
+        lines, keylists, bot = _speech_lines(row, names)
+        return lines, _bot_names(names, bot), keylists, row["path"]
+
+    def fresh_map():
+        found = []
+        pairs = {}
+        for row in rows:
+            lines, keylists, _bot = _speech_lines(row, names)
+            unseen = _unseen_pairs(seen, lines, keylists)
+            if unseen:
+                found.append(row)
+                pairs[row["path"]] = unseen
+        return found, pairs
+
+    if transcript is not None:
+        skipped = []
+        for row in rows:
+            if row["path"] == transcript["path"]:
+                continue
+            lines, keylists, _bot = _speech_lines(row, names)
+            for keys, line in _unseen_pairs(seen, lines, keylists):
+                skipped.append((keys, "not the open chat", line))
+        lines, bot_names, keylists, path = pack(transcript)
+        return lines, bot_names, keylists, path, skipped
+
+    followed = next((row for row in rows if follow_path and row["path"] == follow_path), None)
+    fresh_rows, pairs = fresh_map()
+    if followed is not None:
+        skipped = []
+        for row in fresh_rows:
+            if row["path"] == followed["path"]:
+                continue
+            for keys, line in pairs[row["path"]]:
+                skipped.append((keys, "not the open chat", line))
+        lines, bot_names, keylists, path = pack(followed)
+        return lines, bot_names, keylists, path, skipped
+    if len(fresh_rows) == 1:
+        lines, bot_names, keylists, path = pack(fresh_rows[0])
+        return lines, bot_names, keylists, path, []
+    skipped = []
+    for row in fresh_rows:
+        for keys, line in pairs[row["path"]]:
+            skipped.append((keys, "open chat unclear", line))
+    return [], _bot_names(names, ""), [], None, skipped

@@ -1,4 +1,5 @@
 # The chat-file reader is what Linux uses instead of Windows UI Automation.
+import json
 import os
 import shutil
 import stat
@@ -481,6 +482,158 @@ class StoreTests(unittest.TestCase):
             lines, _names, _keys, _active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
             self.assertIn("moya reply", " ".join(lines))
             self.assertNotIn("cameron background", " ".join(lines))
+            watched, _names, keys, active, skipped = grok_store.watch_snapshot(store, seen=set(), follow_path=None)
+            self.assertEqual(active, _active)
+            self.assertIn("moya reply", " ".join(watched))
+            self.assertNotIn("cameron background", " ".join(watched))
+            self.assertTrue(any(reason == "not the open chat" for _keys, reason, _line in skipped))
+        finally:
+            shutil.rmtree(root)
+
+    def _append_reply(self, path, payload, mtime):
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.utime(path, (mtime, mtime))
+
+    def test_new_reply_is_spoken_when_the_open_chat_is_not_marked(self):
+        """Mint regression: blobs update, but nothing is spoken and no speak line is logged.
+
+        Two chats, no saved selection, and the file time matches the newest
+        message. That is a normal reply, not a chat being opened, so the strict
+        snapshot stays empty. v1.3.3 then dropped the reply. The file is re-read
+        (the mtime changed) and the words are not an already-spoken duplicate.
+        """
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}}'
+                            ']}}')
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            os.utime(cameron, (1_700_000_010, 1_700_000_010))
+            lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
+            self.assertEqual(lines, [])
+            self.assertIsNone(active)
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            self._append_reply(
+                cameron,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}},'
+                '{"kind":"send-message","id":"r-new","seq":2,"timestampMs":1700000100000,"message":{"type":"text","content":"just arrived"}}'
+                ']}}',
+                1_700_000_100)
+            parsed = grok_store._parsed_json(cameron)
+            self.assertIn("just arrived", json.dumps(parsed))
+            lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
+            self.assertEqual(lines, [])
+            self.assertIsNone(active)
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(
+                store, window_titles=["Grok Bot"], seen=seen, follow_path=None)
+            self.assertEqual(skipped, [])
+            self.assertTrue(path.endswith(".blob"))
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("just arrived", fresh[0])
+            self.assertNotIn("cameron reply", " ".join(fresh))
+            spoken = set()
+            self.assertTrue(grok_store.allow_auto_speech(spoken, "just arrived"))
+            self.assertIn("open chat unclear", grok_store.skip_log("open chat unclear", fresh[0]))
+        finally:
+            shutil.rmtree(root)
+
+    def test_reply_keeps_the_chat_after_the_open_signal_drops(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"persistedAt":1700000010000,"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}}'
+                            ']}}')
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            # Cameron's file was saved long after its last message: the chat was opened.
+            os.utime(cameron, (1_700_000_040, 1_700_000_040))
+            lines, _names, keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
+            self.assertIn("cameron reply", " ".join(lines))
+            self.assertNotIn("moya", " ".join(lines).lower())
+            seen = set()
+            grok_store.mark_seen(seen, keys)
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            # The new reply's file time matches the message, so it no longer looks opened.
+            self._append_reply(
+                cameron,
+                '{"schemaVersion":1,"value":{"persistedAt":1700000100000,"entries":['
+                '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}},'
+                '{"kind":"send-message","id":"r-new","seq":2,"timestampMs":1700000100000,"message":{"type":"text","content":"just arrived"}}'
+                ']}}',
+                1_700_000_100)
+            lines, _names, _keys, still = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
+            self.assertEqual(lines, [])
+            self.assertIsNone(still)
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(
+                store, window_titles=["Grok Bot"], seen=seen, follow_path=active)
+            self.assertEqual(path, active)
+            self.assertEqual(skipped, [])
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("just arrived", fresh[0])
+        finally:
+            shutil.rmtree(root)
+
+    def test_two_new_replies_are_skipped_when_the_open_chat_is_unclear(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}}'
+                            ']}}')
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+            os.utime(cameron, (1_700_000_010, 1_700_000_010))
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            self._append_reply(
+                moya,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}},'
+                '{"kind":"send-message","id":"r-moya-new","seq":2,"timestampMs":1700000200000,"message":{"type":"text","content":"moya just arrived"}}'
+                ']}}',
+                1_700_000_200)
+            self._append_reply(
+                cameron,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"r-cameron","seq":1,"timestampMs":1700000010000,"message":{"type":"text","content":"cameron reply"}},'
+                '{"kind":"send-message","id":"r-cameron-new","seq":2,"timestampMs":1700000201000,"message":{"type":"text","content":"cameron just arrived"}}'
+                ']}}',
+                1_700_000_201)
+            watched, _names, _keys, path, skipped = grok_store.watch_snapshot(
+                store, window_titles=["Grok Bot"], seen=seen, follow_path=None)
+            self.assertEqual(watched, [])
+            self.assertIsNone(path)
+            reasons = [reason for _keys, reason, line in skipped]
+            self.assertEqual(reasons, ["open chat unclear", "open chat unclear"])
+            self.assertTrue(any("moya just arrived" in line for _keys, _reason, line in skipped))
+            self.assertTrue(any("cameron just arrived" in line for _keys, _reason, line in skipped))
+            self.assertTrue(grok_store.skip_log("open chat unclear", "cameron just arrived").startswith("skip new reply:"))
         finally:
             shutil.rmtree(root)
 

@@ -379,20 +379,42 @@ def _grok_window():
     return None
 
 
+def chat_folders():
+    return grok_store.windows_chat_dirs(os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA"))
+
+
+def _window_titles():
+    try:
+        return grok_window_titles()
+    except Exception:
+        return []
+
+
 def read_snapshot():
     """The open chat from saved files, re-read on every pass.
 
     The on-screen walk is only used when Grok Bot has not saved a store yet.
     """
-    folders = grok_store.windows_chat_dirs(os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA"))
+    folders = chat_folders()
     if folders:
-        try:
-            titles = grok_window_titles()
-        except Exception:
-            titles = []
-        return grok_store.reply_snapshot(None, window_titles=titles, directories=folders)
+        return grok_store.reply_snapshot(None, window_titles=_window_titles(), directories=folders)
     lines, names = read_chat()
     return lines, names, [[line] for line in lines], None
+
+
+def all_reply_keys():
+    """Every reply already saved, so launch can treat them as history."""
+    return grok_store.every_reply_keylists(None, directories=chat_folders())
+
+
+def watch_snapshot(seen, follow_path):
+    """Automatic read. Keeps a new reply when the open chat is not proven."""
+    folders = chat_folders()
+    if not folders:
+        lines, names, keys, active = read_snapshot()
+        return lines, names, keys, active, []
+    return grok_store.watch_snapshot(
+        None, window_titles=_window_titles(), directories=folders, seen=seen, follow_path=follow_path)
 
 
 def install_hotkeys(flags):
