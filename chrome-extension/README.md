@@ -1,75 +1,69 @@
-# Grok Voice Reader (browser prototype)
+# Grok Voice Reader
 
-A Chrome extension that reads a new Grok reply aloud in the tab you have open. One tab shows one chat, so it does not have to guess which saved chat is on screen.
+A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.1.4**. The popup shows that number next to the title.
 
-This is a prototype. It is not part of the desktop app and it is not a release.
+You need Chrome or Edge, and a speech voice already installed on the computer. Chrome and Edge use the voices that come with Windows or macOS.
 
-It speaks only the visible words of a bot reply that arrives after the page loads, or after you turn the switch on. A reply that is already on the page stays quiet, including one that is still streaming when you turn it on. Your messages stay quiet. Hidden text, link addresses, and markdown marks stay quiet. The same reply is not spoken twice. A streaming reply is spoken after it stops changing for about 1.5 seconds.
+## Download
 
-Speech uses the browser's built-in `speechSynthesis`. The computer needs a voice installed (Chrome and Edge use the system voices).
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.4/Grok-Voice-Reader-Extension.zip).
+2. Unzip it. On Windows, right-click the zip and choose **Extract All**. On a Mac, double-click the zip.
+3. Put the unzipped folder somewhere you will not delete, such as **Documents**. The folder must contain a file named `manifest.json`.
+
+Leave that folder where it is. The browser loads the extension from that place. If you move or delete the folder, the extension stops working.
 
 ## Install in Chrome
 
-1. Open `chrome://extensions`.
-2. Turn on **Developer mode**.
+1. Open Chrome and go to `chrome://extensions`.
+2. Turn on **Developer mode**. The switch is in the top right.
 3. Click **Load unpacked**.
-4. Choose this `chrome-extension` folder (the folder that contains `manifest.json`).
-
-The toolbar icon shows **ON** when the switch is on and the active tab is a Grok page, including `https://grok.com/bot/<id>`. Open the icon for the switch, **Show what it detects**, voice, rate, **Stop**, and **Replay last**. Those choices are kept in `chrome.storage`.
-
-**Show what it detects** outlines the bottom-most assistant body in green. With that on, the page console logs `[GrokVoice]` after each look: how many Streamdown blocks were found, how many groups, the first 60 characters chosen, and why speech was skipped or started. The popup status shows the same count and snippet.
-
-After you reload the extension, reload the Grok tab too. Chrome does not reinject a content script into a tab that is already open. The badge can show **ON** from the address alone before that reload. If the popup says to reload the tab, do that. A missing content script is ignored instead of logging a connection error.
+4. Choose the unzipped folder (the one that contains `manifest.json`).
+5. Pin it so you can find it later. Click the puzzle-piece icon on the toolbar, find **Grok Voice Reader**, and click the pin.
 
 ## Install in Edge
 
-1. Open `edge://extensions`.
-2. Turn on **Developer mode**.
+1. Open Edge and go to `edge://extensions`.
+2. Turn on **Developer mode**. The switch is at the bottom of the left side.
 3. Click **Load unpacked**.
-4. Choose this same `chrome-extension` folder.
-5. Reload the Grok tab.
+4. Choose the same unzipped folder.
+5. Pin it. Click the puzzle-piece icon (or the eye icon) on the toolbar, find **Grok Voice Reader**, and turn the pin on.
 
-Edge uses this same Manifest V3 package. The toolbar badge, popup, and voices work the same way. It stays on APIs Edge supports: `storage`, `activeTab`, `action`, `tabs`, `runtime`, plus the page `speechSynthesis` and `MutationObserver`. There are no Chrome-only APIs.
+## First time you use it
 
-## Which pages it runs on
+1. Open your Grok chat, such as `https://grok.com/bot/…`.
+2. Refresh that tab. The extension does not attach to a tab that was already open.
+3. Click once anywhere on the page. Chrome and Edge sometimes stay quiet until the page has been clicked.
+4. The toolbar icon shows **ON** when the tab is a Grok page and reading is turned on.
+5. Send a new message. When the reply stops changing for about a second and a half, it is read aloud. Replies that were already on the page stay quiet. Your own messages stay quiet. The bot’s name is not read.
 
-The list is `GrokVoice.MATCHES` in `src/config.js`:
+## Voice and speed
 
-- `https://grok.com/bot/*` for a Grok Bot web chat (`grok.com/bot/<id>`)
-- `https://grok.com/*` and `https://*.grok.com/*`
-- `https://grok.x.ai/*` and `https://*.grok.x.ai/*` (older Grok web host)
+1. Click the **Grok Voice Reader** icon.
+2. Open **Voice** and pick a voice. If the list only says **Browser default**, your computer may still be loading voices. Close the popup and open it again.
+3. Move **Rate**. 1.0 is normal. Lower is slower. The highest is 2.
+4. **Stop** stops the voice that is playing.
+5. **Replay last** reads the last reply again.
 
-To add a host, put the match pattern in `src/config.js` and copy that same array into `manifest.json` under `host_permissions` and `content_scripts[0].matches`. Then reload the extension.
+Those choices are remembered.
 
-Chrome ignores the path on a host permission and grants the whole site. Prefer a Grok host. Do not add `https://x.com/*` unless you mean for the extension to read all of X.
+**Show what it detects** is off. Leave it off unless a reply is not being read. When it is on, the latest reply is outlined in green, and the page console (press F12, then **Console**) prints lines that start with `[GrokVoice]`.
 
-`npm test` checks that the three copies of the list match, and that the only API permissions are `storage` and `activeTab`.
+## Update
 
-## How a reply is chosen
+1. Download the new zip and unzip it.
+2. Replace the files inside the folder the browser is already using. Do not give the browser a second folder.
+3. Go back to `chrome://extensions` or `edge://extensions`.
+4. Click **Reload** on Grok Voice Reader. The circular arrow is on the extension card.
+5. Refresh the Grok tab, and click the page once.
 
-The content script runs in every frame of a Grok, xAI, or Cursor page, including `about:blank` and `srcdoc` frames opened by that page. It also looks inside open shadow roots. The popup lists each frame’s address and how many replies that frame found.
+## If nothing is read
 
-This build is **0.1.3**. The popup shows that version beside the title.
+- Refresh the Grok tab after you load or reload the extension.
+- Click the page once.
+- Open the extension popup. It lists each frame and how many replies it found. A count of zero means that frame cannot see the chat.
+- Turn on **Read new replies aloud** if it is off.
 
-Assistant text on grok.com is rendered by Streamdown. The reader uses only those blocks: a `p` with `dir="auto"` whose class contains `streamdown` (for example `streamdown-first-block:mt-0`), plus any list, heading, or table in that same markdown box. The bot name above the reply, the time, and the buttons are not part of that box, so they are not spoken. Several blocks in one box are one reply. A new or changed message is spoken after its text stays still for about 1.5 seconds, and only once.
-
-Your own bubbles are left out even when they use Streamdown. A bubble counts as yours when it is purple, right-aligned (`justify-content: flex-end`, or sitting on the right side of the thread), or marked with a user role or label. The input box, menus, and tooltips are ignored.
-
-Chrome sometimes blocks `speechSynthesis` until the page has been clicked or typed in. When that happens the reply is kept and spoken on the next click or keypress in the tab.
-
-`STREAMDOWN_MARK` and `SETTLE_MS` are in `src/config.js`. The quiet gap is 1.5 seconds. Raise it if a slow stream is read in pieces.
-
-## What the buttons do
-
-- **Read new replies aloud** turns watching on or off. Turning it on does not read what is already on the page.
-- **Show what it detects** outlines the latest assistant bubble and logs its path. It does not change what is spoken.
-- **Voice** and **Rate** are stored for next time. Rate runs from 0.5 to 2.
-- **Stop** stops the current speech and drops a reply that was waiting out the quiet gap.
-- **Replay last** speaks the last reply again, on purpose.
-
-## Test page
-
-`test/fixture.html` is a static chat in the grok.com/bot shape: Streamdown paragraphs, left gray assistant bubbles, and right purple user bubbles that also use Streamdown. It has an old reply, hidden replies, a menu, a tooltip, and a button that streams one new bot reply (two paragraphs, a link, and some markdown). The extension does not run on a `file://` page. The automated test loads the extension and serves this file at `https://grok.com/voice-reader-fixture`.
+## For developers
 
 From this folder, with Chrome or Chromium installed (`CHROME_PATH` if it is not `/usr/bin/google-chrome`):
 
@@ -78,4 +72,4 @@ npm install
 npm test
 ```
 
-The browser test stubs `speechSynthesis` and checks that the newest reply is handed to `speak` exactly once, and that the old reply, the new question, the hidden text, the link address, and the markdown marks are not.
+URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.4`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.

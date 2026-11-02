@@ -159,6 +159,7 @@
   var lastLogLine = "";
 
   function logResolve(report) {
+    if (!debug) return;
     report = report || {};
     var detail = "";
     var groups = report.groups || [];
@@ -174,7 +175,7 @@
       + detail
       + " chosen=\"" + lastDetect.snippet + "\""
       + " skip=" + lastDetect.reason;
-    if (!debug && line === lastLogLine) return;
+    if (line === lastLogLine) return;
     lastLogLine = line;
     try {
       console.log(line);
