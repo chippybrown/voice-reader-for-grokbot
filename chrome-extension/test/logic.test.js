@@ -34,7 +34,7 @@ test("match list is valid and copied into the manifest", () => {
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
   assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
-  assert.equal(manifest.version, "0.1.5");
+  assert.equal(manifest.version, "0.1.6");
   assert.deepEqual(manifest.content_scripts[0].js, [
     "src/config.js",
     "src/text.js",

@@ -4,11 +4,6 @@
 
   var GV = root.GrokVoice || (root.GrokVoice = {});
 
-  var BLOCK = {
-    P: 1, DIV: 1, LI: 1, UL: 1, OL: 1, TR: 1, SECTION: 1, ARTICLE: 1,
-    BLOCKQUOTE: 1, PRE: 1, BR: 1, HR: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1
-  };
-
   function patternParts(pattern) {
     var match = /^(\*|https?):\/\/(\*|(?:\*\.)?[^/*]+)(\/.*)$/.exec(pattern);
     if (!match) return null;
@@ -126,36 +121,94 @@
     return false;
   }
 
+  // Marks a paragraph, list item, or other block the voice should pause at.
+  var BOUNDARY = "\u0001";
+  var SENTENCE = {
+    P: 1, LI: 1, TR: 1, BLOCKQUOTE: 1, PRE: 1,
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1
+  };
+
+  function boxDisplay(el) {
+    var view = el.ownerDocument && el.ownerDocument.defaultView;
+    if (!view || !view.getComputedStyle) return "";
+    try {
+      var style = view.getComputedStyle(el);
+      return style && style.display ? style.display : "";
+    } catch (err) {
+      return "";
+    }
+  }
+
+  // Flex and grid items are separate boxes on screen. innerText puts a break
+  // between them even when the markup has no space character.
+  function isSeparatedBox(el) {
+    var parent = el.parentElement;
+    if (!parent) return false;
+    var display = boxDisplay(parent);
+    return display === "flex" || display === "inline-flex" || display === "grid" || display === "inline-grid";
+  }
+
   function walk(node, parts) {
     if (!node) return;
     if (node.nodeType === 3) {
       var value = node.nodeValue || "";
-      if (!value.trim() || isOnlyUrl(value)) return;
+      // Keep whitespace-only nodes. Streamdown puts the space between word
+      // spans in its own text node, and dropping it glues the words together.
+      if (!value || isOnlyUrl(value)) return;
       parts.push(value);
       return;
     }
     if (node.nodeType !== 1) return;
     if (shouldSkip(node)) return;
     if (node.tagName === "BR" || node.tagName === "HR") {
-      parts.push("\n");
+      parts.push(BOUNDARY);
       return;
     }
-    var block = BLOCK[node.tagName] === 1;
-    if (block) parts.push("\n");
+    var sentence = SENTENCE[node.tagName] === 1;
+    if (sentence) parts.push(BOUNDARY);
+    else if (isSeparatedBox(node)) parts.push(" ");
     var children = node.childNodes;
     for (var i = 0; i < children.length; i++) walk(children[i], parts);
-    if (block) parts.push("\n");
+    if (sentence) parts.push(BOUNDARY);
+  }
+
+  function endsWithPause(text) {
+    return /[.!?…]["')\]]*$/.test(text);
+  }
+
+  // Join visible chunks. A chunk that does not already end a sentence gets a
+  // period so speech pauses between paragraphs and list items.
+  GV.speakableJoin = function speakableJoin(parts) {
+    var out = [];
+    var i;
+    for (i = 0; i < parts.length; i++) {
+      var text = String(parts[i] || "").replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      if (out.length && !endsWithPause(out[out.length - 1])) out[out.length - 1] += ".";
+      out.push(text);
+    }
+    return out.join(" ");
+  };
+
+  function speechFromParts(parts) {
+    var chunks = parts.join("").split(BOUNDARY);
+    var spoken = [];
+    for (var i = 0; i < chunks.length; i++) {
+      var text = GV.stripForSpeech(chunks[i]);
+      if (text) spoken.push(text);
+    }
+    return GV.speakableJoin(spoken);
   }
 
   // Words a person can see. Link addresses, hidden nodes, and markdown
-  // marks are left out. href is never read.
+  // marks are left out. href is never read. Spacing matches the screen.
   GV.visibleSpeech = function visibleSpeech(root) {
     if (!root || root.nodeType !== 1) return "";
     if (shouldSkip(root)) return "";
     var parts = [];
     var children = root.childNodes;
     for (var i = 0; i < children.length; i++) walk(children[i], parts);
-    return GV.stripForSpeech(parts.join(""));
+    return speechFromParts(parts);
   };
 
   GV.visibleRaw = function visibleRaw(root) {
@@ -164,6 +217,6 @@
     var parts = [];
     var children = root.childNodes;
     for (var i = 0; i < children.length; i++) walk(children[i], parts);
-    return parts.join("").replace(/\s+/g, " ").trim();
+    return parts.join("").replace(new RegExp(BOUNDARY, "g"), " ").replace(/\s+/g, " ").trim();
   };
 })(globalThis);

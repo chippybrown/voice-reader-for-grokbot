@@ -406,7 +406,7 @@
       var text = GV.visibleSpeech(blocks[i]);
       if (text) parts.push(text);
     }
-    return parts.join(" ");
+    return GV.speakableJoin(parts);
   };
 
   function collectParagraphs(rootNode, found, selector) {
