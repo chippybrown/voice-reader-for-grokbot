@@ -156,6 +156,44 @@ def linux_store(config_dir, home=None, config_home=None, env=None):
     return choose_store(candidate_dirs(home or os.path.expanduser("~"), config_home))
 
 
+def linux_chat_dirs(config_dir, home=None, config_home=None, env=None):
+    """Every persistence folder to re-check. A configured path stays the only one."""
+    chosen = configured_store(config_dir, env=env)
+    if chosen:
+        return [chosen] if os.path.isdir(chosen) else []
+    home = home or os.path.expanduser("~")
+    config_home = config_home or xdg_config_home(home)
+    return [path for path in candidate_dirs(home, config_home) if os.path.isdir(path)]
+
+
+def windows_chat_dirs(appdata, localappdata=None):
+    """Persistence folders for every Windows profile root, including a nested account folder."""
+    roots = []
+    for root in (appdata, localappdata):
+        if root and root not in roots:
+            roots.append(root)
+    found = []
+
+    def add(path):
+        path = os.path.normpath(path)
+        if path not in found and os.path.isdir(path):
+            found.append(path)
+
+    for root in roots:
+        for name in APP_DIR_NAMES:
+            base = os.path.join(root, name)
+            add(os.path.join(base, PERSISTENCE_NAME))
+            if not os.path.isdir(base):
+                continue
+            try:
+                children = os.listdir(base)
+            except OSError:
+                children = []
+            for child in children:
+                add(os.path.join(base, child, PERSISTENCE_NAME))
+    return found
+
+
 def _read_text(path):
     prefix = "\\\\?\\" if os.name == "nt" else ""
     with open(prefix + os.path.abspath(path), encoding="utf-8", errors="ignore") as handle:
@@ -402,14 +440,22 @@ def _transcripts(directory):
         persisted = value.get("persistedAt")
         if isinstance(persisted, (int, float)) and persisted > 1000000000000:
             stamp = max(stamp, persisted / 1000.0)
-        found.append({"agent_id": match.group(2), "path": path, "entries": entries, "stamp": stamp})
+        found.append({
+            "account": match.group(1),
+            "agent_id": match.group(2),
+            "path": path,
+            "entries": entries,
+            "stamp": stamp,
+        })
     return found
 
 
-_EXPLICIT_AGENT_KEYS = {
+# Current selection only. lastSelectedAgentId is the previous bot, and treating
+# it as a second vote made a bot switch look ambiguous and fall back to the
+# old conversation.
+_CURRENT_AGENT_KEYS = {
     "selectedagentid", "activeagentid", "currentagentid", "openagentid",
-    "focusedagentid", "lastselectedagentid", "selectedagent", "activeagent",
-    "currentagent",
+    "focusedagentid", "selectedagent", "activeagent", "currentagent",
 }
 _SELECTED_FLAGS = ("selected", "active", "isSelected", "isActive", "isCurrent", "isOpen")
 _SELECTION_HINTS = (
@@ -434,19 +480,6 @@ def _flag_is_on(row, flag):
     return row.get(flag) in (True, "true", 1)
 
 
-def _selected_roster_id(directory, known):
-    chosen = []
-    for row in roster_rows(directory):
-        agent_id = row.get("id")
-        if not isinstance(agent_id, str) or agent_id not in known:
-            continue
-        if any(_flag_is_on(row, flag) for flag in _SELECTED_FLAGS):
-            chosen.append(agent_id)
-    if len(chosen) == 1:
-        return chosen[0]
-    return None
-
-
 def _document_value(path):
     try:
         parsed = json.loads(_read_text(path))
@@ -457,41 +490,126 @@ def _document_value(path):
     return parsed
 
 
-def _collect_agent_ids(value, known, explicit, loose, loose_ok):
+def _current_agent_ids(value, known, found):
+    """Agent ids named as the open bot. Previous-bot fields are ignored."""
     if isinstance(value, dict):
-        agent = value.get("id") if isinstance(value.get("id"), str) else value.get("agentId")
-        if loose_ok and isinstance(agent, str) and agent in known and any(_flag_is_on(value, flag) for flag in _SELECTED_FLAGS):
-            explicit.add(agent)
         for key, item in value.items():
-            if _key_name(key) in _EXPLICIT_AGENT_KEYS and isinstance(item, str) and item in known:
-                explicit.add(item)
-            elif loose_ok and _key_name(key) in ("agentid", "conversationid") and isinstance(item, str) and item in known:
-                loose.add(item)
+            if _key_name(key) in _CURRENT_AGENT_KEYS and isinstance(item, str) and item in known:
+                found.add(item)
             else:
-                _collect_agent_ids(item, known, explicit, loose, loose_ok)
+                _current_agent_ids(item, known, found)
     elif isinstance(value, list):
         for item in value:
-            _collect_agent_ids(item, known, explicit, loose, loose_ok)
-    elif loose_ok and isinstance(value, str) and value in known:
-        loose.add(value)
+            _current_agent_ids(item, known, found)
 
 
-def _selected_slice_id(directory, known):
-    """An agent id named by a selection slice, or None when that is ambiguous."""
-    explicit = set()
-    loose = set()
-    for key, path in _slices(directory):
-        if "transcript.replicas" in key:
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+def _known_accounts(slices, rows):
+    accounts = {row["account"] for row in rows}
+    for key, _path in slices:
+        match = ROSTER_SLICE.match(key)
+        if match:
+            accounts.add(match.group(1))
+    return accounts
+
+
+def _account_for_key(key, accounts):
+    """Account id embedded in a slice key, or None for a global slice."""
+    prefix = "sand.client.slice.account."
+    if not key.startswith(prefix):
+        return None
+    rest = key[len(prefix):]
+    matches = [account for account in accounts if rest.startswith(account + ".")]
+    if not matches:
+        return None
+    matches.sort(key=len, reverse=True)
+    return matches[0]
+
+
+def _selection_hits(slices, accounts, known):
+    """(mtime, agent id, account or None) for slices that name one open bot.
+
+    The newest hit wins. An older account's saved selection cannot outvote
+    the account that was just opened.
+    """
+    hits = []
+    for key, path in slices:
+        if "transcript.replicas" in key or not _is_selection_slice(key):
             continue
         value = _document_value(path)
         if value is None:
             continue
-        _collect_agent_ids(value, known, explicit, loose, _is_selection_slice(key))
-    if len(explicit) == 1:
-        return next(iter(explicit))
-    if not explicit and len(loose) == 1:
-        return next(iter(loose))
+        found = set()
+        _current_agent_ids(value, known, found)
+        if len(found) != 1:
+            continue
+        hits.append((_mtime(path), next(iter(found)), _account_for_key(key, accounts)))
+    return hits
+
+
+def _freshest_account(slices, accounts):
+    """Account whose UI state was written last. Transcript writes do not count.
+
+    A background bot keeps updating its own transcript. That must not pull
+    the reader off the account Chip just switched to.
+    """
+    best = None
+    best_mtime = None
+    for key, path in slices:
+        if "transcript.replicas" in key:
+            continue
+        account = _account_for_key(key, accounts)
+        if account not in accounts:
+            continue
+        stamp = _mtime(path)
+        if best_mtime is None or stamp > best_mtime:
+            best = account
+            best_mtime = stamp
+    return best
+
+
+def _roster_selected_id(slices, account, known):
+    chosen = []
+    for key, path in slices:
+        match = ROSTER_SLICE.match(key)
+        if not match or match.group(1) != account:
+            continue
+        value = _load_value(path) or {}
+        for row in value.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            agent_id = row.get("id")
+            if not isinstance(agent_id, str) or agent_id not in known:
+                continue
+            if any(_flag_is_on(row, flag) for flag in _SELECTED_FLAGS):
+                chosen.append(agent_id)
+    if len(chosen) == 1:
+        return chosen[0]
     return None
+
+
+def is_grok_window_title(text):
+    """True for a Grok Bot window, including 'Larry — Grok Bot'. Not our toolbar."""
+    folded = " ".join(str(text or "").split()).lower()
+    if not folded or "grokbot voice" in folded:
+        return False
+    return "grok bot" in folded
+
+
+def grok_titles_from_names(names):
+    """Window names that belong to Grok Bot, in the order they were seen."""
+    titles = []
+    for name in names or []:
+        text = " ".join(str(name or "").split())
+        if is_grok_window_title(text) and text not in titles:
+            titles.append(text)
+    return titles
 
 
 def agent_id_from_titles(titles, names):
@@ -550,43 +668,101 @@ def _latest_user_transcript(rows):
     return best
 
 
-def active_transcript(directory, window_titles=None):
-    """The conversation open in Grok Bot, not whichever bot wrote most recently.
+def _store_list(directory, directories):
+    folders = []
+    for folder in list(directories or []) + ([directory] if directory else []):
+        if folder and folder not in folders:
+            folders.append(folder)
+    return folders
 
-    A background bot updates its own transcript while Chip is looking at
-    another chat. The open chat is, in order: a selected agent saved in the
-    persistence slices, a roster row marked selected, the bot named in the
-    window title, then the conversation with the newest message from the
-    user. The newest file is only the last resort when none of those exist.
+
+def _load_stores(folders):
+    slices = []
+    rows = []
+    names = {}
+    for folder in folders:
+        for key, path in _slices(folder):
+            slices.append((key, path))
+        rows.extend(_transcripts(folder))
+        names.update(roster_names(folder))
+    return slices, rows, names
+
+
+def _row_for(rows, account, agent_id):
+    matches = [row for row in rows if row["agent_id"] == agent_id and (account is None or row["account"] == account)]
+    if account is None and len(matches) == 1:
+        return matches[0]
+    for row in matches:
+        if row["account"] == account:
+            return row
+    return None
+
+
+def active_transcript(directory, window_titles=None, directories=None):
+    """The conversation on screen now, checked again from the files every time.
+
+    A saved selection from an earlier bot or an earlier account must not pin
+    the reader. The window title wins when it names one bot, because that is
+    the chat Chip is looking at. Otherwise the account is the one whose
+    roster or selection was written last, not the transcript a background
+    bot just updated. Inside that account the newest selection wins, then a
+    roster row marked selected, then the newest message from the user, then
+    the newest file. Switching chats does not speak the backlog; the caller
+    marks the lines already in the new file as seen.
     """
-    rows = _transcripts(directory)
+    slices, rows, names = _load_stores(_store_list(directory, directories))
     if not rows:
         return None
-    by_id = {row["agent_id"]: row for row in rows}
-    known = set(by_id)
-    selected = _selected_slice_id(directory, known) or _selected_roster_id(directory, known)
-    if selected in by_id:
-        return by_id[selected]
-    named = agent_id_from_titles(window_titles, roster_names(directory))
-    if named in by_id:
-        return by_id[named]
-    latest = _latest_user_transcript(rows)
+    accounts = _known_accounts(slices, rows)
+    known = {row["agent_id"] for row in rows}
+    title_ids = set()
+    titled = agent_id_from_titles(window_titles, names)
+    if titled:
+        title_ids.add(titled)
+    account = None
+    title_accounts = {row["account"] for row in rows if row["agent_id"] in title_ids}
+    if len(title_accounts) == 1:
+        account = next(iter(title_accounts))
+    if account is None:
+        account = _freshest_account(slices, accounts)
+    if account is None:
+        latest = _latest_user_transcript(rows)
+        account = latest["account"] if latest is not None else rows[-1]["account"]
+    scoped = [row for row in rows if row["account"] == account] or rows
+    in_view = [row for row in scoped if row["agent_id"] in title_ids]
+    if len(in_view) == 1:
+        return in_view[0]
+    hits = [hit for hit in _selection_hits(slices, accounts, known) if hit[2] in (None, account)]
+    if hits:
+        hits.sort()
+        _stamp, agent_id, hit_account = hits[-1]
+        chosen = _row_for(scoped, hit_account if hit_account == account else account, agent_id)
+        if chosen is not None:
+            return chosen
+    selected = _roster_selected_id(slices, account, known)
+    chosen = _row_for(scoped, account, selected) if selected else None
+    if chosen is not None:
+        return chosen
+    latest = _latest_user_transcript(scoped)
     if latest is not None:
         return latest
-    rows.sort(key=lambda row: row["stamp"])
-    return rows[-1]
+    scoped.sort(key=lambda row: row["stamp"])
+    return scoped[-1]
 
 
-def reply_snapshot(directory, window_titles=None):
+def reply_snapshot(directory, window_titles=None, directories=None):
     """(lines, bot names, key lists, active file) for the open chat.
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
-    window_titles are Grok Bot window titles, used when no saved selection
-    names the open agent.
+    window_titles are the live Grok Bot window titles. Every call re-reads
+    the stores, including after a bot switch or an account switch.
     """
-    names = roster_names(directory)
-    transcript = active_transcript(directory, window_titles=window_titles)
+    folders = _store_list(directory, directories)
+    names = {}
+    for folder in folders:
+        names.update(roster_names(folder))
+    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
     if transcript is None:
         return [], sorted(names.values(), key=len, reverse=True), [], None
     agent_id = transcript["agent_id"]

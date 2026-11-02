@@ -307,15 +307,19 @@ def grok_window_titles():
 
 
 def read_snapshot():
-    """Lines, names, stable keys, and the active transcript path."""
-    directory = persistence_dir()
-    if not directory:
+    """Lines, names, stable keys, and the active transcript path.
+
+    Every existing chat folder is read again, so an account that lives in
+    a different folder is visible the moment its files appear.
+    """
+    folders = grok_store.linux_chat_dirs(config_dir())
+    if not folders:
         return [], [], [], None
     try:
         titles = grok_window_titles()
     except Exception:
         titles = []
-    return grok_store.reply_snapshot(directory, window_titles=titles)
+    return grok_store.reply_snapshot(None, window_titles=titles, directories=folders)
 
 
 def install_hotkeys(flags):
