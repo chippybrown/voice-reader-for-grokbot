@@ -322,12 +322,13 @@ def announce(reply):
 
 _logged_store = False
 def chat_snapshot():
-    """Visible replies, stable keys, and the Linux transcript path (None on Windows)."""
+    """Visible replies, stable keys, and the open transcript path."""
     global _logged_store
+    lines, names, keylists, active = platform.read_snapshot()
     if not _logged_store:
         _logged_store = True
-        log("chat folder: %s" % (platform.persistence_dir() or "(not found)"))
-    lines, names, keylists, active = platform.read_snapshot()
+        folder = os.path.dirname(active) if active else (platform.persistence_dir() or "(not found)")
+        log("chat folder: %s" % folder)
     remember_names(names)
     kept_lines = []
     kept_keys = []

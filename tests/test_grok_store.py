@@ -296,6 +296,127 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_bot_switch_follows_the_open_window_and_does_not_reread_it(self):
+        root = tempfile.mkdtemp()
+        try:
+            store, _larry, amy_file = self._two_chats(root, 1_900_000_000_000, 1_700_000_000_000)
+            # Larry was typed to last. The saved current bot is Amy, and the
+            # previous bot is also recorded. Only Amy is open.
+            _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                  '{"schemaVersion":1,"value":{"selectedAgentId":"amy","lastSelectedAgentId":"larry"}}')
+            lines, _names, _keys, _active = grok_store.reply_snapshot(store)
+            self.assertIn("amy reply", " ".join(lines))
+            self.assertNotIn("larry reply", " ".join(lines))
+            # The saved selection is still Larry, but the window has moved to Amy.
+            selection = _blob(store, "sand.client.slice.account.a.ui.selected-agent",
+                              '{"schemaVersion":1,"value":{"selectedAgentId":"larry","lastSelectedAgentId":"amy"}}')
+            os.utime(selection, (1_000, 1_000))
+            lines, _names, keys, previous = grok_store.reply_snapshot(store, window_titles=["Amy — Grok Bot"])
+            spoken = " ".join(lines)
+            self.assertIn("amy reply", spoken)
+            self.assertNotIn("larry reply", spoken)
+            seen = set()
+            grok_store.mark_seen(seen, keys)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keys), [])
+            with open(amy_file, "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"entries":['
+                             '{"kind":"message","role":"user","id":"u-amy","seq":1,"timestampMs":1700000000000,"content":"question for amy"},'
+                             '{"kind":"send-message","id":"r-amy","seq":2,"timestampMs":1700000008000,"message":{"type":"text","content":"amy reply"}},'
+                             '{"kind":"send-message","id":"r-amy-new","seq":3,"timestampMs":1700000010000,"message":{"type":"text","content":"just arrived"}}'
+                             ']}}')
+            lines, _names, keys, active = grok_store.reply_snapshot(store, window_titles=["Amy — Grok Bot"])
+            self.assertEqual(active, previous)
+            fresh = grok_store.unseen_lines(seen, lines, keys)
+            self.assertEqual(len(fresh), 1)
+            self.assertIn("just arrived", fresh[0])
+            self.assertNotIn("amy reply", " ".join(fresh))
+        finally:
+            shutil.rmtree(root)
+
+    def test_account_switch_drops_the_old_session(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            home_chat = _blob(store, "sand.client.slice.account.grok|user_home.transcript.replicas.larry",
+                              '{"schemaVersion":1,"value":{"entries":['
+                              '{"kind":"message","role":"user","id":"u-home","seq":1,"timestampMs":1900000000000,"content":"home question"},'
+                              '{"kind":"send-message","id":"r-home","seq":2,"timestampMs":1900000001000,"message":{"type":"text","content":"home reply"}}'
+                              ']}}')
+            home_selection = _blob(store, "sand.client.slice.account.grok|user_home.ui.selected-agent",
+                                   '{"schemaVersion":1,"value":{"selectedAgentId":"larry"}}')
+            _blob(store, "sand.client.slice.account.grok|user_work.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"payroll","name":"Payroll"}]}}')
+            _blob(store, "sand.client.slice.account.grok|user_work.transcript.replicas.payroll",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"message","role":"user","id":"u-work","seq":1,"timestampMs":1800000000000,"content":"work question"},'
+                  '{"kind":"send-message","id":"r-work","seq":2,"timestampMs":1800000001000,"message":{"type":"text","content":"work reply"}}'
+                  ']}}')
+            work_roster = os.path.join(store, grok_store.encode_base32(
+                "sand.client.slice.account.grok|user_work.roster.last-roster") + ".blob")
+            os.utime(home_selection, (1_000, 1_000))
+            os.utime(work_roster, (5_000, 5_000))
+            os.utime(home_chat, (9_000, 9_000))
+            lines, _names, keys, active = grok_store.reply_snapshot(store)
+            spoken = " ".join(lines)
+            self.assertIn("work reply", spoken)
+            self.assertNotIn("home reply", spoken)
+            # A later write from the old account's bot is not the open chat.
+            os.utime(home_chat, (20_000, 20_000))
+            lines, _names, _keys, still = grok_store.reply_snapshot(store)
+            self.assertEqual(still, active)
+            self.assertIn("work reply", " ".join(lines))
+            self.assertNotIn("home reply", " ".join(lines))
+            seen = set()
+            grok_store.mark_seen(seen, keys)
+            self.assertEqual(grok_store.unseen_lines(seen, lines, keys), [])
+        finally:
+            shutil.rmtree(root)
+
+    def test_account_switch_can_be_a_different_folder(self):
+        root = tempfile.mkdtemp()
+        try:
+            home = os.path.join(root, "home", "sand-client-persistence")
+            work = os.path.join(root, "work", "sand-client-persistence")
+            _blob(home, "sand.client.slice.account.grok|user_home.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"}]}}')
+            _blob(home, "sand.client.slice.account.grok|user_home.transcript.replicas.larry",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"r-home","seq":1,"timestampMs":1900000000000,"message":{"type":"text","content":"home reply"}}'
+                  ']}}')
+            home_selection = _blob(home, "sand.client.slice.account.grok|user_home.ui.selected-agent",
+                                   '{"schemaVersion":1,"value":{"selectedAgentId":"larry"}}')
+            home_roster = os.path.join(home, grok_store.encode_base32(
+                "sand.client.slice.account.grok|user_home.roster.last-roster") + ".blob")
+            _blob(work, "sand.client.slice.account.grok|user_work.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"payroll","name":"Payroll"}]}}')
+            _blob(work, "sand.client.slice.account.grok|user_work.transcript.replicas.payroll",
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"r-work","seq":1,"timestampMs":1800000000000,"message":{"type":"text","content":"work reply"}}'
+                  ']}}')
+            os.utime(home_selection, (1_000, 1_000))
+            os.utime(home_roster, (1_000, 1_000))
+            os.utime(os.path.join(work, grok_store.encode_base32(
+                "sand.client.slice.account.grok|user_work.roster.last-roster") + ".blob"), (5_000, 5_000))
+            lines, _names, _keys, _active = grok_store.reply_snapshot(None, directories=[home, work])
+            self.assertIn("work reply", " ".join(lines))
+            self.assertNotIn("home reply", " ".join(lines))
+            # The window title names the work bot even when the old selection file is newer.
+            os.utime(home_selection, (9_000, 9_000))
+            lines, _names, _keys, _active = grok_store.reply_snapshot(
+                None, window_titles=["Payroll — Grok Bot"], directories=[home, work])
+            self.assertIn("work reply", " ".join(lines))
+            self.assertNotIn("home reply", " ".join(lines))
+        finally:
+            shutil.rmtree(root)
+
+    def test_window_titles_include_the_open_bot(self):
+        titles = grok_store.grok_titles_from_names([
+            "Grokbot Voice", "Larry — Grok Bot", "Grok Bot", "Notepad",
+        ])
+        self.assertEqual(titles, ["Larry — Grok Bot", "Grok Bot"])
+        self.assertIsNone(grok_store.agent_id_from_titles(["Grok Bot"], {"larry": "Larry"}))
+        self.assertEqual(grok_store.agent_id_from_titles(titles, {"larry": "Larry", "amy": "Amy"}), "larry")
+
     def test_active_chat_is_the_newest_file(self):
         root = tempfile.mkdtemp()
         try:

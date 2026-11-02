@@ -301,8 +301,8 @@ def read_chat():
     whose name carries an agent-outbound id.
     """
     import uiautomation as auto
-    win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
-    if not win.Exists(0, 0):
+    win = _grok_window()
+    if win is None:
         return [], []
     found, inside = [], False
     skip = ("Message", "You ", "Chip ", "Eldon ")
@@ -322,13 +322,33 @@ def read_chat():
     return found, []
 
 
+def _window_name(control):
+    try:
+        return control.Name or ""
+    except Exception:
+        return ""
+
+
 def grok_window_titles():
-    """The Grok Bot window title, when UI Automation can see it."""
+    """Titles of Grok Bot windows, including 'Payroll — Grok Bot'.
+
+    Searching for the exact name 'Grok Bot' misses the window once a bot
+    name is in the title, which left the reader on the previous chat.
+    """
     try:
         import uiautomation as auto
+        names = []
+        root = auto.GetRootControl()
+        for child in root.GetChildren():
+            name = _window_name(child)
+            if name:
+                names.append(name)
+        titles = grok_store.grok_titles_from_names(names)
+        if titles:
+            return titles
         win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
         if win.Exists(0, 0):
-            title = (win.Name or "").strip()
+            title = _window_name(win).strip()
             if title:
                 return [title]
     except Exception:
@@ -336,18 +356,41 @@ def grok_window_titles():
     return []
 
 
+def _grok_window():
+    """A Grok Bot top-level window, preferring one whose title names a bot."""
+    try:
+        import uiautomation as auto
+        root = auto.GetRootControl()
+        matches = []
+        for child in root.GetChildren():
+            name = _window_name(child).strip()
+            if grok_store.is_grok_window_title(name):
+                matches.append((name, child))
+        named = [(name, child) for name, child in matches if name.lower() not in ("grok bot", "grokbot", "grok")]
+        if named:
+            return named[0][1]
+        if matches:
+            return matches[0][1]
+        win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
+        if win.Exists(0, 0):
+            return win
+    except Exception:
+        pass
+    return None
+
+
 def read_snapshot():
-    """The open chat from saved files, with the window title as a hint.
+    """The open chat from saved files, re-read on every pass.
 
     The on-screen walk is only used when Grok Bot has not saved a store yet.
     """
-    directory = persistence_dir()
-    if directory and os.path.isdir(directory):
+    folders = grok_store.windows_chat_dirs(os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA"))
+    if folders:
         try:
             titles = grok_window_titles()
         except Exception:
             titles = []
-        return grok_store.reply_snapshot(directory, window_titles=titles)
+        return grok_store.reply_snapshot(None, window_titles=titles, directories=folders)
     lines, names = read_chat()
     return lines, names, [[line] for line in lines], None
 

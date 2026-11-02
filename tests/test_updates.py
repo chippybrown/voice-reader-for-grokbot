@@ -28,6 +28,7 @@ class Response:
 class UpdateTests(unittest.TestCase):
     def test_versions_and_the_two_messages(self):
         self.assertFalse(updates.newer("1.3.0", "v1.3.0"))
+        self.assertTrue(updates.newer("1.3.0", "v1.3.1"))
         self.assertTrue(updates.newer("1.3.0", "v1.4.0"))
         self.assertTrue(updates.newer("1.2.9", "1.3.0"))
         self.assertFalse(updates.newer("1.10.0", "1.9.0"))
@@ -46,6 +47,17 @@ class UpdateTests(unittest.TestCase):
         self.assertTrue(ahead["available"])
         self.assertEqual(ahead["windows_name"], "Grokbot.Voice.exe")
         self.assertTrue(ahead["windows_url"].endswith(".exe"))
+        patch = updates.describe("1.3.0", {
+            "tag_name": "v1.3.1",
+            "assets": [
+                {"name": "Grokbot.Voice.exe", "browser_download_url": "https://example.test/Grokbot.Voice.exe"},
+            ],
+        })
+        self.assertEqual(patch["message"], "v1.3.1 is available")
+        self.assertTrue(patch["available"])
+        self.assertTrue(patch["windows_url"].endswith("Grokbot.Voice.exe"))
+        self.assertEqual(updates.describe("1.3.1", {"tag_name": "v1.3.1", "assets": []})["message"],
+                         "You're up to date (v1.3.1)")
 
     def test_quiet_check_is_at_most_once_a_day(self):
         self.assertEqual(updates.launch_note("1.3.0", {}, 100), ("fetch", ""))
