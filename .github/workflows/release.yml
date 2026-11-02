@@ -34,12 +34,19 @@ jobs:
         shell: pwsh
         run: |
           python packaging/windows/make_version_file.py dist/version-info.txt
-          pyinstaller --noconfirm --onedir --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates --exclude-module vosk grok_voice.py
+          pyinstaller --noconfirm --onedir --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates --hidden-import windows_launcher --exclude-module vosk grok_voice.py
           Copy-Item dist/version.txt "dist/Grokbot Voice/version.txt"
-          if (Test-Path dist/Grokbot-Voice-Windows.zip) { Remove-Item dist/Grokbot-Voice-Windows.zip }
-          Compress-Archive -Path "dist/Grokbot Voice/*" -DestinationPath dist/Grokbot-Voice-Windows.zip
           pyinstaller --noconfirm --onefile --noconsole --name "Grokbot.Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "dist/version.txt;." --exclude-module vosk --exclude-module piper --exclude-module onnxruntime --exclude-module uiautomation --exclude-module numpy --distpath dist/launcher windows_launcher.py
           Copy-Item "dist/launcher/Grokbot.Voice.exe" "dist/Grokbot.Voice.exe" -Force
+          # The real program is inside app\. The starter exe at the top is what
+          # a 1.3.2 or 1.3.3 updater launches, so it must not sit next to _internal.
+          $payload = "dist\windows-payload"
+          if (Test-Path $payload) { Remove-Item -Recurse -Force $payload }
+          New-Item -ItemType Directory -Force -Path "$payload\app" | Out-Null
+          Copy-Item -Path "dist\Grokbot Voice\*" -Destination "$payload\app" -Recurse -Force
+          Copy-Item "dist\Grokbot.Voice.exe" "$payload\Grokbot Voice.exe" -Force
+          if (Test-Path dist\Grokbot-Voice-Windows.zip) { Remove-Item dist\Grokbot-Voice-Windows.zip }
+          Compress-Archive -Path "$payload\*" -DestinationPath dist\Grokbot-Voice-Windows.zip
 
       - name: Attach the executable to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')

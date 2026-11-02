@@ -140,13 +140,16 @@ class UpdateTests(unittest.TestCase):
                 27860,
                 r"C:\Users\Dad\AppData\Roaming\Grok Voice\GrokbotVoice-update.exe",
                 r"C:\Users\Dad\Downloads\Grokbot.Voice.exe",
-                staging=r"C:\Users\Dad\AppData\Roaming\Grok Voice\update-staging",
-                install_dir=r"C:\Users\Dad\AppData\Local\Grokbot Voice",
-                start_exe=r"C:\Users\Dad\AppData\Local\Grokbot Voice\Grokbot Voice.exe",
+                staging=r"C:\Users\Dad\AppData\Local\Grokbot Voice\.app-new",
+                install_dir=r"C:\Users\Dad\AppData\Local\Grokbot Voice\app",
+                start_exe=r"C:\Users\Dad\AppData\Local\Grokbot Voice\app\Grokbot Voice.exe",
             )
             self.assertIn(r"Downloads\Grokbot.Voice.exe", downloads)
-            self.assertIn("update-staging", downloads)
-            self.assertIn("CopyFolder", downloads)
+            self.assertIn(".app-new", downloads)
+            self.assertIn("MoveFolder", downloads)
+            self.assertNotIn("CopyFolder", downloads)
+            self.assertNotIn('DeleteFolder "C:\\Users\\Dad\\AppData\\Local\\Grokbot Voice"', downloads)
+            self.assertIn(r"Grokbot Voice\app\Grokbot Voice.exe", downloads)
             self.assertNotIn("tasklist", text.lower())
             self.assertNotIn("find ", text.lower())
             self.assertNotIn("python.exe", text.lower())
