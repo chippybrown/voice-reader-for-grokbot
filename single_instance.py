@@ -4,6 +4,8 @@ import os
 import sys
 import threading
 
+import grok_store
+
 
 class InstanceLock:
     def __init__(self, directory):
@@ -20,7 +22,7 @@ class InstanceLock:
         to raise its window.
         """
         try:
-            os.makedirs(self.directory, exist_ok=True)
+            os.makedirs(grok_store.extended_path(self.directory), exist_ok=True)
         except OSError:
             return True
         if sys.platform == "win32":
@@ -52,7 +54,7 @@ class InstanceLock:
                 sock.close()
                 return False
             try:
-                os.remove(self.path)
+                os.remove(grok_store.extended_path(self.path))
             except OSError:
                 pass
             try:
@@ -153,7 +155,7 @@ class InstanceLock:
             except OSError:
                 pass
         try:
-            os.remove(self.path)
+            os.remove(grok_store.extended_path(self.path))
         except OSError:
             pass
         if self._mutex and sys.platform == "win32":

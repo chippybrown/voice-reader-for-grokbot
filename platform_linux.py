@@ -43,7 +43,7 @@ def log_path():
 
 def wav_path(name):
     cache = os.path.dirname(log_path())
-    os.makedirs(cache, exist_ok=True)
+    os.makedirs(grok_store.extended_path(cache), exist_ok=True)
     return os.path.join(cache, "grok_voice_%s.wav" % name)
 
 
@@ -63,8 +63,8 @@ def key_file():
 def _write_key_file(path, key):
     folder = os.path.dirname(path)
     if folder:
-        os.makedirs(folder, exist_ok=True)
-    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.makedirs(grok_store.extended_path(folder), exist_ok=True)
+    handle = os.open(grok_store.extended_path(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(handle, key.encode("utf-8"))
     finally:
@@ -74,7 +74,7 @@ def _write_key_file(path, key):
 
 def preserve_key_file(path, read_key=None):
     """Keep a keyring key in the config file. Returns kept, exported, or missing."""
-    if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+    if path and os.path.isfile(grok_store.extended_path(path)) and os.path.getsize(grok_store.extended_path(path)) > 0:
         return "kept"
     if read_key is None:
         def read_key():
@@ -100,13 +100,13 @@ def load_key():
         key = ""
     if key:
         try:
-            if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+            if not (os.path.isfile(grok_store.extended_path(path)) and os.path.getsize(grok_store.extended_path(path)) > 0):
                 preserve_key_file(path, lambda: key)
         except Exception:
             pass
         return key
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(grok_store.extended_path(path), encoding="utf-8") as handle:
             return handle.read().strip()
     except OSError:
         return ""
@@ -131,7 +131,7 @@ def apply_icon(root):
         import tkinter as tk
         base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
         for path in (os.path.join(base, "icon.png"), os.path.join(base, "assets", "icon.png")):
-            if os.path.isfile(path):
+            if os.path.isfile(grok_store.extended_path(path)):
                 image = tk.PhotoImage(file=path)
                 root.iconphoto(True, image)
                 root._icon_ref = image
@@ -198,7 +198,7 @@ def find_piper():
     env = os.environ.get("GROKBOT_PIPER", "").strip()
     local = os.path.join(piper_dir(), "piper")
     for path in (env, local):
-        if path and os.path.isfile(path) and os.access(path, os.X_OK) and _is_tts_piper(path):
+        if path and os.path.isfile(grok_store.extended_path(path)) and os.access(grok_store.extended_path(path), os.X_OK) and _is_tts_piper(path):
             return path
     found = shutil.which("piper")
     if found and _is_tts_piper(found):
@@ -207,7 +207,7 @@ def find_piper():
 
 
 def synthesize(kind, ref, text, speed, pitch, dest):
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    os.makedirs(grok_store.extended_path(os.path.dirname(dest)), exist_ok=True)
     if kind == "piper":
         binary = find_piper()
         if not binary:
@@ -215,7 +215,8 @@ def synthesize(kind, ref, text, speed, pitch, dest):
         ratio = pitch_ratio(pitch)
         length = ratio / max(0.3, float(speed))
         subprocess.run(
-            [binary, "--model", ref, "--output_file", dest, "--length_scale", "%.4f" % length],
+            [binary, "--model", grok_store.extended_path(ref), "--output_file", grok_store.extended_path(dest),
+             "--length_scale", "%.4f" % length],
             input=text.encode("utf-8"),
             check=True,
         )
@@ -228,7 +229,7 @@ def synthesize(kind, ref, text, speed, pitch, dest):
         wpm = max(80, min(450, int(round(175 * float(speed)))))
         espeak_pitch = max(0, min(99, int(round(50 + float(pitch) * 4))))
         subprocess.run(
-            [binary, "-w", dest, "-s", str(wpm), "-p", str(espeak_pitch), "-v", str(ref)],
+            [binary, "-w", grok_store.extended_path(dest), "-s", str(wpm), "-p", str(espeak_pitch), "-v", str(ref)],
             input=text.encode("utf-8"),
             check=True,
         )
@@ -246,7 +247,7 @@ def _player_command(path):
                 break
     if not _player_bin:
         return None
-    return [_player_bin, path]
+    return [_player_bin, grok_store.extended_path(path)]
 
 
 class LinuxAudio:
@@ -432,8 +433,8 @@ def install_hotkeys(flags):
 
 def _log_hotkey(exc):
     try:
-        os.makedirs(os.path.dirname(log_path()), exist_ok=True)
-        with open(log_path(), "a", encoding="utf-8") as handle:
+        os.makedirs(grok_store.extended_path(os.path.dirname(log_path())), exist_ok=True)
+        with open(grok_store.extended_path(log_path()), "a", encoding="utf-8") as handle:
             handle.write("hotkeys unavailable (%s). On Wayland, use the on-screen buttons.\n" % exc)
     except OSError:
         pass

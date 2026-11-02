@@ -7,7 +7,6 @@ import hashlib
 # JSON: {"schemaVersion": N, "value": ...}. Transcript slices hold
 # value.entries. The roster slice holds value.rows of bots.
 import base64
-import glob
 import json
 import os
 import re
@@ -60,11 +59,37 @@ def xdg_config_home(home=None):
     return os.path.join(home, ".config")
 
 
+def extended_path(path):
+    """Path for open, stat, and listdir. On Windows, \\\\?\\ or \\\\?\\UNC\\.
+
+    LongPathsEnabled stays untouched. The prefix is what lets a path over
+    260 characters open, with no admin change and no longPathAware manifest.
+    Other systems get the same path they passed in.
+    """
+    if path is None or path == "":
+        return path
+    if os.name != "nt":
+        return path
+    text = os.fspath(path).replace("/", "\\")
+    if text.startswith("\\\\?\\"):
+        return text
+    return _windows_long_path(os.path.abspath(text))
+
+
+def _windows_long_path(absolute):
+    text = absolute.replace("/", "\\")
+    if text.startswith("\\\\?\\"):
+        return text
+    if text.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + text[2:]
+    return "\\\\?\\" + text
+
+
 def normalize_store(path):
     """Accept either the persistence folder or the Grok Bot config folder above it."""
     path = os.path.expanduser(path.strip())
     nested = os.path.join(path, PERSISTENCE_NAME)
-    if os.path.isdir(nested):
+    if os.path.isdir(extended_path(nested)):
         return nested
     return path
 
@@ -85,9 +110,9 @@ def candidate_dirs(home, config_home=None):
             add(os.path.join(root, name, PERSISTENCE_NAME))
 
     var_app = os.path.join(home, ".var", "app")
-    if os.path.isdir(var_app):
+    if os.path.isdir(extended_path(var_app)):
         try:
-            apps = os.listdir(var_app)
+            apps = os.listdir(extended_path(var_app))
         except OSError:
             apps = []
         for app in apps:
@@ -97,9 +122,9 @@ def candidate_dirs(home, config_home=None):
             add(os.path.join(config, PERSISTENCE_NAME))
 
     snap = os.path.join(home, "snap")
-    if os.path.isdir(snap):
+    if os.path.isdir(extended_path(snap)):
         try:
-            snaps = os.listdir(snap)
+            snaps = os.listdir(extended_path(snap))
         except OSError:
             snaps = []
         for name in snaps:
@@ -112,18 +137,26 @@ def candidate_dirs(home, config_home=None):
 
 
 def _blob_mtime(path):
-    blobs = glob.glob(os.path.join(path, "*.blob"))
-    if not blobs:
-        return None
     try:
-        return max(os.path.getmtime(blob) for blob in blobs)
+        names = os.listdir(extended_path(path))
     except OSError:
         return None
+    stamps = []
+    for name in names:
+        if not name.endswith(".blob"):
+            continue
+        try:
+            stamps.append(os.path.getmtime(extended_path(os.path.join(path, name))))
+        except OSError:
+            continue
+    if not stamps:
+        return None
+    return max(stamps)
 
 
 def choose_store(candidates):
     """Pick the folder that actually has chat files. Earlier candidates win ties."""
-    existing = [path for path in candidates if os.path.isdir(path)]
+    existing = [path for path in candidates if os.path.isdir(extended_path(path))]
     if not existing:
         return None
     scored = []
@@ -141,7 +174,7 @@ def configured_store(config_dir, env=None):
     if not raw:
         pointer = os.path.join(config_dir, "chat-folder.txt")
         try:
-            raw = open(pointer, encoding="utf-8").read().strip()
+            raw = open(extended_path(pointer), encoding="utf-8").read().strip()
         except OSError:
             raw = ""
     if not raw:
@@ -161,10 +194,10 @@ def linux_chat_dirs(config_dir, home=None, config_home=None, env=None):
     """Every persistence folder to re-check. A configured path stays the only one."""
     chosen = configured_store(config_dir, env=env)
     if chosen:
-        return [chosen] if os.path.isdir(chosen) else []
+        return [chosen] if os.path.isdir(extended_path(chosen)) else []
     home = home or os.path.expanduser("~")
     config_home = config_home or xdg_config_home(home)
-    return [path for path in candidate_dirs(home, config_home) if os.path.isdir(path)]
+    return [path for path in candidate_dirs(home, config_home) if os.path.isdir(extended_path(path))]
 
 
 def windows_chat_dirs(appdata, localappdata=None):
@@ -177,17 +210,17 @@ def windows_chat_dirs(appdata, localappdata=None):
 
     def add(path):
         path = os.path.normpath(path)
-        if path not in found and os.path.isdir(path):
+        if path not in found and os.path.isdir(extended_path(path)):
             found.append(path)
 
     for root in roots:
         for name in APP_DIR_NAMES:
             base = os.path.join(root, name)
             add(os.path.join(base, PERSISTENCE_NAME))
-            if not os.path.isdir(base):
+            if not os.path.isdir(extended_path(base)):
                 continue
             try:
-                children = os.listdir(base)
+                children = os.listdir(extended_path(base))
             except OSError:
                 children = []
             for child in children:
@@ -196,8 +229,7 @@ def windows_chat_dirs(appdata, localappdata=None):
 
 
 def _read_text(path):
-    prefix = "\\\\?\\" if os.name == "nt" else ""
-    with open(prefix + os.path.abspath(path), encoding="utf-8", errors="ignore") as handle:
+    with open(extended_path(path), encoding="utf-8", errors="ignore") as handle:
         return handle.read()
 
 
@@ -239,7 +271,7 @@ def _parsed_json(path):
     """
     for attempt in (1, 2):
         try:
-            stat = os.stat(path)
+            stat = os.stat(extended_path(path))
         except OSError as exc:
             if attempt == 1 and isinstance(exc, (FileNotFoundError, PermissionError)):
                 continue
@@ -286,10 +318,10 @@ def _slices(directory):
     renames it onto the blob. That one missing file is skipped later; it
     must not abandon the rest of the folder.
     """
-    if not directory or not os.path.isdir(directory):
+    if not directory or not os.path.isdir(extended_path(directory)):
         return []
     try:
-        names = os.listdir(directory)
+        names = os.listdir(extended_path(directory))
     except OSError as exc:
         note_read_problem(directory, exc.__class__.__name__)
         return []
@@ -332,8 +364,15 @@ def chief_voice(directory, name):
     """The bot's saved voiceId from whatever slice stores it. ('carina', 1.0) for Moya."""
     pat = re.compile(r'\{"id":"[0-9a-f-]{36}","name":"%s"' % re.escape(name))
     vpat = re.compile(r'"voiceId":"([a-z]+)","voiceSpeed":([\d.]+)')
-    if directory and os.path.isdir(directory):
-        for blob in glob.glob(os.path.join(directory, "*.blob")):
+    if directory and os.path.isdir(extended_path(directory)):
+        try:
+            names = os.listdir(extended_path(directory))
+        except OSError:
+            names = []
+        for blob_name in names:
+            if not blob_name.endswith(".blob"):
+                continue
+            blob = os.path.join(directory, blob_name)
             try:
                 text = _read_text(blob)
             except OSError:
@@ -349,7 +388,11 @@ def chief_voice(directory, name):
 
 def piper_voice_choices(piper_dir):
     """(label, 'piper', onnx path) for each model file in the folder."""
-    files = sorted(glob.glob(os.path.join(piper_dir, "*.onnx")))
+    try:
+        names = os.listdir(extended_path(piper_dir))
+    except OSError:
+        names = []
+    files = sorted(os.path.join(piper_dir, name) for name in names if name.endswith(".onnx"))
     keys = [os.path.basename(path).split("-")[1] if "-" in os.path.basename(path) else os.path.basename(path) for path in files]
     choices = []
     for path in files:
@@ -548,7 +591,7 @@ def _transcripts(directory):
             if not isinstance(entries, list):
                 continue
             try:
-                stamp = os.path.getmtime(path)
+                stamp = os.path.getmtime(extended_path(path))
             except OSError:
                 stamp = 0
             persisted = value.get("persistedAt")
@@ -618,7 +661,7 @@ def _current_agent_ids(value, known, found):
 
 def _mtime(path):
     try:
-        return os.path.getmtime(path)
+        return os.path.getmtime(extended_path(path))
     except OSError:
         return 0
 
@@ -817,7 +860,7 @@ def _load_stores(folders):
         files += len(listed)
         for _key, path in listed:
             try:
-                stamp = os.path.getmtime(path)
+                stamp = os.path.getmtime(extended_path(path))
             except OSError as exc:
                 note_read_problem(path, exc.__class__.__name__)
                 continue
