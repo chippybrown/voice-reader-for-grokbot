@@ -743,6 +743,65 @@ class StoreTests(unittest.TestCase):
             grok_store._read_problems.clear()
             shutil.rmtree(root)
 
+    def test_a_blob_deleted_between_list_and_read_does_not_stop_the_next_reply(self):
+        """Grok Bot renames a temp file onto the blob. The missing name is skipped."""
+        root = tempfile.mkdtemp()
+        real = grok_store._read_text
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"old","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"old reply"}}'
+                         ']}}')
+            grok_store._json_cache.clear()
+            grok_store._read_problems.clear()
+            _lines, _names, keys, active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keys)
+            real_stat = os.stat
+
+            def stat(path, *args, **kwargs):
+                # Listed, then replaced: the name is gone by the time we stat it.
+                if os.path.abspath(path) == os.path.abspath(moya):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    raise FileNotFoundError(path)
+                return real_stat(path, *args, **kwargs)
+
+            os.stat = stat
+            watched, _names, _keys, _path, _skipped = grok_store.watch_snapshot(
+                store, seen=seen, follow_path=active)
+            self.assertEqual(watched, [])
+            self.assertTrue(any("FileNotFoundError" in text for text in grok_store._read_problems.values()))
+            os.stat = real_stat
+            replacement = moya + ".tmp"
+            with open(replacement, "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"entries":['
+                             '{"kind":"send-message","id":"old","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"old reply"}},'
+                             '{"kind":"send-message","id":"new","seq":2,"timestampMs":1700000005000,"message":{"type":"text","content":"just arrived"}}'
+                             ']}}')
+            os.replace(replacement, moya)
+            watched, _names, keys, path, _skipped = grok_store.watch_snapshot(
+                store, seen=seen, follow_path=active)
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertTrue(any("just arrived" in line for line in fresh))
+            self.assertEqual(path, moya)
+            self.assertEqual(grok_store.watch_heartbeat(70, None), "watching: 70 files, last change none")
+            files, newest = grok_store.last_scan()
+            self.assertGreaterEqual(files, 1)
+            self.assertIsNotNone(newest)
+            self.assertIn("last change", grok_store.watch_heartbeat(files, newest))
+        finally:
+            grok_store._read_text = real
+            os.stat = real_stat
+            grok_store._json_cache.clear()
+            grok_store._read_problems.clear()
+            shutil.rmtree(root)
+
     def test_unchanged_chat_file_is_not_read_twice(self):
         root = tempfile.mkdtemp()
         try:

@@ -231,25 +231,44 @@ def clear_read_problem(path):
 
 
 def _parsed_json(path):
-    """Parse a blob once until its size or modification time changes."""
-    try:
-        stat = os.stat(path)
-    except OSError as exc:
-        note_read_problem(path, exc.__class__.__name__)
-        return None
-    token = _stat_token(stat)
-    cached = _json_cache.get(path)
-    if cached and cached[0] == token:
-        return cached[1]
-    try:
-        parsed = json.loads(_read_text(path))
-    except (OSError, json.JSONDecodeError) as exc:
-        note_read_problem(path, exc.__class__.__name__)
-        _json_cache.pop(path, None)
-        return None
-    _json_cache[path] = (token, parsed)
-    clear_read_problem(path)
-    return parsed
+    """Parse a blob once until its size or modification time changes.
+
+    A file that disappears between the directory listing and the read is
+    skipped. The failure is not stored, and it is tried once more in case
+    the replacement file is already in place.
+    """
+    for attempt in (1, 2):
+        try:
+            stat = os.stat(path)
+        except OSError as exc:
+            if attempt == 1 and isinstance(exc, (FileNotFoundError, PermissionError)):
+                continue
+            note_read_problem(path, exc.__class__.__name__)
+            return None
+        token = _stat_token(stat)
+        cached = _json_cache.get(path)
+        if cached and cached[0] == token:
+            clear_read_problem(path)
+            return cached[1]
+        try:
+            parsed = json.loads(_read_text(path))
+        except (FileNotFoundError, PermissionError) as exc:
+            if attempt == 1:
+                continue
+            note_read_problem(path, exc.__class__.__name__)
+            _json_cache.pop(path, None)
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            if attempt == 1 and isinstance(exc, json.JSONDecodeError):
+                continue
+            note_read_problem(path, exc.__class__.__name__)
+            _json_cache.pop(path, None)
+            return None
+        _json_cache[path] = (token, parsed)
+        clear_read_problem(path)
+        return parsed
+    note_read_problem(path, "FileNotFoundError")
+    return None
 
 
 def _load_value(path):
@@ -261,17 +280,27 @@ def _load_value(path):
 
 
 def _slices(directory):
+    """Blob names that were present when the folder was listed.
+
+    A name can vanish before it is read. Grok Bot writes a temp file and
+    renames it onto the blob. That one missing file is skipped later; it
+    must not abandon the rest of the folder.
+    """
     if not directory or not os.path.isdir(directory):
         return []
+    try:
+        names = os.listdir(directory)
+    except OSError as exc:
+        note_read_problem(directory, exc.__class__.__name__)
+        return []
     rows = []
-    for name in os.listdir(directory):
+    for name in names:
         if not name.endswith(".blob"):
             continue
         key = decode_base32(name[:-5])
         if not key:
             continue
-        path = os.path.join(directory, name)
-        rows.append((key, path))
+        rows.append((key, os.path.join(directory, name)))
     return rows
 
 
@@ -510,27 +539,30 @@ def _clock(timestamp_ms):
 def _transcripts(directory):
     found = []
     for key, path in _slices(directory):
-        match = TRANSCRIPT_SLICE.match(key)
-        if not match:
-            continue
-        value = _load_value(path) or {}
-        entries = value.get("entries")
-        if not isinstance(entries, list):
-            continue
         try:
-            stamp = os.path.getmtime(path)
-        except OSError:
-            stamp = 0
-        persisted = value.get("persistedAt")
-        if isinstance(persisted, (int, float)) and persisted > 1000000000000:
-            stamp = max(stamp, persisted / 1000.0)
-        found.append({
-            "account": match.group(1),
-            "agent_id": match.group(2),
-            "path": path,
-            "entries": entries,
-            "stamp": stamp,
-        })
+            match = TRANSCRIPT_SLICE.match(key)
+            if not match:
+                continue
+            value = _load_value(path) or {}
+            entries = value.get("entries")
+            if not isinstance(entries, list):
+                continue
+            try:
+                stamp = os.path.getmtime(path)
+            except OSError:
+                stamp = 0
+            persisted = value.get("persistedAt")
+            if isinstance(persisted, (int, float)) and persisted > 1000000000000:
+                stamp = max(stamp, persisted / 1000.0)
+            found.append({
+                "account": match.group(1),
+                "agent_id": match.group(2),
+                "path": path,
+                "entries": entries,
+                "stamp": stamp,
+            })
+        except Exception as exc:
+            note_read_problem(path, exc.__class__.__name__)
     return found
 
 
@@ -757,15 +789,51 @@ def _store_list(directory, directories):
     return folders
 
 
+_scan = {"files": 0, "newest": None}
+
+
+def last_scan():
+    """(blob count, newest mtime or None) from the last folder read."""
+    return _scan["files"], _scan["newest"]
+
+
+def watch_heartbeat(files, newest):
+    """One status line. A minute with no new line means the poll has stalled."""
+    if newest:
+        stamp = time.strftime("%H:%M:%S", time.localtime(newest))
+    else:
+        stamp = "none"
+    return "watching: %d files, last change %s" % (int(files or 0), stamp)
+
+
 def _load_stores(folders):
     slices = []
     rows = []
     names = {}
+    files = 0
+    newest = None
     for folder in folders:
-        for key, path in _slices(folder):
-            slices.append((key, path))
-        rows.extend(_transcripts(folder))
-        names.update(roster_names(folder))
+        listed = _slices(folder)
+        files += len(listed)
+        for _key, path in listed:
+            try:
+                stamp = os.path.getmtime(path)
+            except OSError as exc:
+                note_read_problem(path, exc.__class__.__name__)
+                continue
+            if newest is None or stamp > newest:
+                newest = stamp
+        slices.extend(listed)
+        try:
+            rows.extend(_transcripts(folder))
+        except Exception as exc:
+            note_read_problem(folder, exc.__class__.__name__)
+        try:
+            names.update(roster_names(folder))
+        except Exception as exc:
+            note_read_problem(folder, exc.__class__.__name__)
+    _scan["files"] = files
+    _scan["newest"] = newest
     return slices, rows, names
 
 
