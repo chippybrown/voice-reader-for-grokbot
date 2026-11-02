@@ -31,7 +31,15 @@ jobs:
         run: echo "version=$(python -c 'import version; print(version.VERSION)')" >> "$GITHUB_OUTPUT"
 
       - name: Build Grokbot Voice
-        run: pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates grok_voice.py
+        shell: pwsh
+        run: |
+          python packaging/windows/make_version_file.py dist/version-info.txt
+          pyinstaller --noconfirm --onedir --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates --exclude-module vosk grok_voice.py
+          Copy-Item dist/version.txt "dist/Grokbot Voice/version.txt"
+          if (Test-Path dist/Grokbot-Voice-Windows.zip) { Remove-Item dist/Grokbot-Voice-Windows.zip }
+          Compress-Archive -Path "dist/Grokbot Voice/*" -DestinationPath dist/Grokbot-Voice-Windows.zip
+          pyinstaller --noconfirm --onefile --noconsole --name "Grokbot.Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "dist/version.txt;." --exclude-module vosk --exclude-module piper --exclude-module onnxruntime --exclude-module uiautomation --exclude-module numpy --distpath dist/launcher windows_launcher.py
+          Copy-Item "dist/launcher/Grokbot.Voice.exe" "dist/Grokbot.Voice.exe" -Force
 
       - name: Attach the executable to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -40,7 +48,8 @@ jobs:
           name: Grokbot Voice v${{ steps.appver.outputs.version }}
           fail_on_unmatched_files: true
           files: |
-            dist/Grokbot Voice.exe
+            dist/Grokbot.Voice.exe
+            dist/Grokbot-Voice-Windows.zip
 
   build-linux:
     runs-on: ubuntu-22.04

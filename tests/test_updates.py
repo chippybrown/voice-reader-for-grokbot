@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 import updates
+import windows_launcher
 
 
 class Response:
@@ -63,7 +64,12 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(updates.launch_note("1.3.0", {}, 100), ("fetch", ""))
         waiting = {"checked": 1_000, "latest": "1.4.0", "available": True}
         self.assertEqual(updates.launch_note("1.3.0", waiting, 1_000 + 60), ("skip", "Update available"))
-        self.assertEqual(updates.launch_note("1.4.0", waiting, 1_000 + 60), ("skip", ""))
+        self.assertEqual(updates.launch_note("1.4.0", waiting, 1_000 + 60), ("clear", ""))
+        stale = {"checked": 1_000, "latest": "1.3.1", "available": True}
+        self.assertEqual(updates.launch_note("1.3.2", stale, 1_060), ("clear", ""))
+        self.assertTrue(windows_launcher.should_install("", "1.3.3"))
+        self.assertTrue(windows_launcher.should_install("1.3.2", "1.3.3"))
+        self.assertFalse(windows_launcher.should_install("1.3.3", "1.3.3"))
         self.assertEqual(updates.launch_note("1.3.0", waiting, 1_000 + updates.DAY), ("fetch", ""))
         directory = tempfile.mkdtemp()
         try:
@@ -130,6 +136,17 @@ class UpdateTests(unittest.TestCase):
             self.assertIn("tries > 80", text)
             self.assertIn("Grokbot Voice.exe", text)
             self.assertIn("CopyFile", text)
+            downloads = updates.windows_script(
+                27860,
+                r"C:\Users\Dad\AppData\Roaming\Grok Voice\GrokbotVoice-update.exe",
+                r"C:\Users\Dad\Downloads\Grokbot.Voice.exe",
+                staging=r"C:\Users\Dad\AppData\Roaming\Grok Voice\update-staging",
+                install_dir=r"C:\Users\Dad\AppData\Local\Grokbot Voice",
+                start_exe=r"C:\Users\Dad\AppData\Local\Grokbot Voice\Grokbot Voice.exe",
+            )
+            self.assertIn(r"Downloads\Grokbot.Voice.exe", downloads)
+            self.assertIn("update-staging", downloads)
+            self.assertIn("CopyFolder", downloads)
             self.assertNotIn("tasklist", text.lower())
             self.assertNotIn("find ", text.lower())
             self.assertNotIn("python.exe", text.lower())

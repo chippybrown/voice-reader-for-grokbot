@@ -223,7 +223,11 @@ def piper_job(text, token, wait):
         if token == speak_state["token"]:
             speak_state["making"] = False
 
-def say(text, wait=False, bot=None):
+_auto_spoken = set()
+
+def say(text, wait=False, bot=None, replay=False):
+    if text and not grok_store.allow_auto_speech(_auto_spoken, text, replay=replay):
+        return
     apply_bot_voice(bot)
     if text:
         log("speak [%s] [%s] %s" % (bot or "?", speak_state.get("label", "?"), text[:60].replace("\n", " ")))
@@ -795,7 +799,7 @@ def open_tuner():
         win.destroy()
         tuner["win"] = None
         open_tuner()
-    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
+    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.", replay=True)), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
         tk.Button(bar2, text=txt, command=cmd, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                   relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9)).pack(side="left", padx=4)
     win.update_idletasks()
@@ -960,7 +964,7 @@ def tick():
             if history:
                 state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
                 state["queue"].clear()
-                say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+                say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]), replay=True)
             else:
                 say("")
     if flags["skip"]:   # Next
@@ -970,7 +974,7 @@ def tick():
         if state["pos"] is not None and state["pos"] < len(history) - 1:
             state["pos"] += 1          # step forward through history
             state["queue"].clear()
-            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]), replay=True)
         else:
             # stop the current reply now and go back to watching for a new one
             state["queue"].clear()
@@ -984,7 +988,7 @@ def tick():
             resume_audio()      # carry on from that spot, then keep watching
             absorb_current()    # skip what came in while paused
     if manual:
-        say(announce(manual), bot=bot_of(manual))
+        say(announce(manual), bot=bot_of(manual), replay=True)
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
@@ -1085,6 +1089,12 @@ def quiet_update_check():
     path = os.path.join(platform.config_dir(), "update-check.json")
     now = time.time()
     action, note = updates.launch_note(VERSION, updates.read_state(path), now)
+    if action == "clear":
+        try:
+            updates.write_state(path, now, {"latest": VERSION, "available": False})
+        except Exception:
+            pass
+        return
     if action == "skip":
         if note:
             root.after(0, lambda: update_note.update(text=note))
@@ -1115,6 +1125,10 @@ if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.update()
     root.destroy()
 else:
+    try:
+        updates.remove_old_updater(platform.config_dir())
+    except Exception:
+        pass
     threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
     threading.Thread(target=quiet_update_check, name="update-check", daemon=True).start()
     root.after(200, tick)

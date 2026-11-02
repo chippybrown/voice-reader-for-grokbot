@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 
 
 PERSISTENCE_NAME = "sand-client-persistence"
@@ -200,11 +201,30 @@ def _read_text(path):
         return handle.read()
 
 
-def _load_value(path):
+# path -> (mtime_ns, size, parsed json). Idle polling must not re-read unchanged chats.
+_json_cache = {}
+
+
+def _parsed_json(path):
+    """Parse a blob once until its size or modification time changes."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    token = (getattr(stat, "st_mtime_ns", stat.st_mtime), getattr(stat, "st_ctime_ns", 0), stat.st_size)
+    cached = _json_cache.get(path)
+    if cached and cached[0] == token:
+        return cached[1]
     try:
         parsed = json.loads(_read_text(path))
     except (OSError, json.JSONDecodeError):
-        return None
+        parsed = None
+    _json_cache[path] = (token, parsed)
+    return parsed
+
+
+def _load_value(path):
+    parsed = _parsed_json(path)
     if not isinstance(parsed, dict):
         return None
     value = parsed.get("value")
@@ -326,6 +346,41 @@ _MD_LINK = re.compile(r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)|\[([^\]]+)\
 _AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
 
 
+def plain_label(text):
+    """Letters and numbers only, so an emoji in a bot name is not spoken or logged as '?'."""
+    kept = []
+    for char in str(text or ""):
+        if char == "\ufffd":
+            continue
+        category = unicodedata.category(char)
+        if category.startswith(("L", "N", "Z")) or (category.startswith("P") and char.isascii() and char != "?"):
+            kept.append(char)
+        elif char in "&/-+*'":
+            kept.append(char)
+    cleaned = "".join(kept)
+    cleaned = re.sub(r"(?<=\S)\?(?=\s)", "", cleaned)
+    return " ".join(cleaned.split())
+
+
+def speech_key(text):
+    """Identity of words already spoken. Emoji and symbols do not make a new line."""
+    plain = plain_label(text)
+    if not plain:
+        return ""
+    return hashlib.sha256(plain.encode("utf-8")).hexdigest()
+
+
+def allow_auto_speech(spoken, text, replay=False):
+    """False when this automatic read was already spoken. Back may repeat it."""
+    key = speech_key(text)
+    if not key:
+        return bool(replay)
+    if key in spoken and not replay:
+        return False
+    spoken.add(key)
+    return True
+
+
 def render_speech(text):
     """The words a person would read on screen, without markdown chrome.
 
@@ -362,7 +417,7 @@ def render_speech(text):
         line = " ".join(line.split())
         if line:
             pieces.append(line)
-    return ". ".join(pieces)
+    return plain_label(". ".join(pieces))
 
 
 def _entry_text(entry):
@@ -408,8 +463,8 @@ def entry_keys(entry, bot, text):
     when a rewrite assigns a new id but the text is unchanged.
     """
     keys = ["id:" + value for value in _message_ids(entry)]
-    rendered = " ".join((text or "").split())
-    raw = "%s\n%s" % (bot, rendered)
+    rendered = plain_label(text)
+    raw = "%s\n%s" % (plain_label(bot), rendered)
     keys.append("h:" + hashlib.sha256(raw.encode("utf-8")).hexdigest())
     return keys
 
@@ -481,10 +536,7 @@ def _flag_is_on(row, flag):
 
 
 def _document_value(path):
-    try:
-        parsed = json.loads(_read_text(path))
-    except (OSError, json.JSONDecodeError):
-        return None
+    parsed = _parsed_json(path)
     if isinstance(parsed, dict) and "value" in parsed:
         return parsed.get("value")
     return parsed
@@ -753,6 +805,13 @@ def active_transcript(directory, window_titles=None, directories=None):
         return None
     scoped = [row for row in rows if row["account"] == account]
     hits = [hit for hit in _selection_hits(slices, accounts, known) if hit[2] in (None, account)]
+    for key, path in slices:
+        match = ROSTER_SLICE.match(key)
+        if not match or match.group(1) != account:
+            continue
+        picked = _roster_selected_id([(key, path)], account, known)
+        if picked:
+            hits.append((_mtime(path), picked, account))
     hits.sort()
     selection_mtime = hits[-1][0] if hits else None
     selection_id = hits[-1][1] if hits else None
@@ -795,7 +854,7 @@ def reply_snapshot(directory, window_titles=None, directories=None):
     if transcript is None:
         return [], sorted(names.values(), key=len, reverse=True), [], None
     agent_id = transcript["agent_id"]
-    bot = names.get(agent_id) or "Bot"
+    bot = plain_label(names.get(agent_id) or "") or "Bot"
     lines = []
     keylists = []
     entries = list(transcript["entries"])

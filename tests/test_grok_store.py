@@ -107,6 +107,13 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn("print", spoken)
         self.assertIn("Before", spoken)
         self.assertIn("After", spoken)
+        self.assertEqual(grok_store.plain_label("A\U0001F916 CAD/CAM"), "A CAD/CAM")
+        self.assertEqual(grok_store.plain_label("A? CAD/CAM"), "A CAD/CAM")
+        self.assertNotIn("\U0001F916", grok_store.render_speech("See \U0001F916 this"))
+        spoken_once = set()
+        self.assertTrue(grok_store.allow_auto_speech(spoken_once, "The same reply"))
+        self.assertFalse(grok_store.allow_auto_speech(spoken_once, "The same reply"))
+        self.assertTrue(grok_store.allow_auto_speech(spoken_once, "The same reply", replay=True))
 
     def test_message_id_survives_rewrite_and_chat_switch(self):
         root = tempfile.mkdtemp()
@@ -141,8 +148,9 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(active, active2)
             self.assertEqual(grok_store.unseen_lines(seen, lines, keylists), [])
             # Switch to Amy, then back. Larry's id is still known.
-            _blob(store, "sand.client.slice.account.a.roster.last-roster",
-                  '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy","selected":true}]}}')
+            roster = _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                           '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry"},{"id":"amy","name":"Amy","selected":true}]}}')
+            os.utime(roster, (2_000_000_000, 2_000_000_000))
             lines, _names, keylists, _active = grok_store.reply_snapshot(store)
             fresh = grok_store.unseen_lines(seen, lines, keylists)
             self.assertEqual(len(fresh), 1)
@@ -545,6 +553,31 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(any(os.path.join("snap", "grok-bot", "common") in path for path in names))
         finally:
             shutil.rmtree(home)
+
+    def test_unchanged_chat_file_is_not_read_twice(self):
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            path = _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                         '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"}]}}')
+            grok_store._json_cache.clear()
+            calls = {"n": 0}
+            real = grok_store._read_text
+
+            def counting(blob):
+                calls["n"] += 1
+                return real(blob)
+
+            grok_store._read_text = counting
+            try:
+                self.assertEqual(grok_store._load_value(path)["rows"][0]["name"], "Moya")
+                self.assertEqual(grok_store._load_value(path)["rows"][0]["name"], "Moya")
+                self.assertEqual(calls["n"], 1)
+            finally:
+                grok_store._read_text = real
+                grok_store._json_cache.clear()
+        finally:
+            shutil.rmtree(root)
 
     def test_xai_key_file_is_kept_when_the_keyring_is_empty(self):
         root = tempfile.mkdtemp()

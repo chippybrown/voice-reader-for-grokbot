@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import urllib.request
+import zipfile
 
 REPO = "chippybrown/voice-reader-for-grokbot"
 LATEST_URL = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -53,22 +54,38 @@ def newer(current, latest):
     return there > here
 
 
-def windows_asset(assets):
-    """The Windows program. GitHub stores the spaced name as Grokbot.Voice.exe."""
-    found = []
+def windows_files(assets):
+    """Launcher exe and the onedir zip. The exe name on GitHub uses a dot."""
+    exe_name, exe_url = "", ""
+    zip_name, zip_url = "", ""
     for asset in assets or []:
         if not isinstance(asset, dict):
             continue
         name = str(asset.get("name") or "")
         url = str(asset.get("browser_download_url") or "")
-        if url and name.lower().endswith(".exe"):
-            found.append((name, url))
-    for name, url in found:
-        if "voice" in name.lower():
-            return name, url
-    if found:
-        return found[0]
-    return "", ""
+        lower = name.lower()
+        if not url:
+            continue
+        if lower.endswith(".exe") and "voice" in lower and not exe_url:
+            exe_name, exe_url = name, url
+        elif lower.endswith(".zip") and "windows" in lower:
+            zip_name, zip_url = name, url
+    if not exe_url:
+        for asset in assets or []:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "")
+            url = str(asset.get("browser_download_url") or "")
+            if url and name.lower().endswith(".exe"):
+                exe_name, exe_url = name, url
+                break
+    return exe_name, exe_url, zip_name, zip_url
+
+
+def windows_asset(assets):
+    """The Windows program. GitHub stores the spaced name as Grokbot.Voice.exe."""
+    name, url, _zip_name, _zip_url = windows_files(assets)
+    return name, url
 
 
 def describe(current, payload):
@@ -80,7 +97,7 @@ def describe(current, payload):
     tag = str(payload.get("tag_name") or "").strip()
     if not parse_version(tag):
         return failed
-    name, url = windows_asset(payload.get("assets") or [])
+    name, url, zip_name, zip_url = windows_files(payload.get("assets") or [])
     available = newer(current, tag)
     if available:
         message = "v%s is available" % bare(tag)
@@ -95,6 +112,8 @@ def describe(current, payload):
         "tag": tag,
         "windows_name": name,
         "windows_url": url,
+        "zip_name": zip_name,
+        "zip_url": zip_url,
     }
 
 
@@ -160,8 +179,26 @@ def launch_note(current, state, now):
     if not due(state.get("checked"), now):
         if state.get("available") and newer(current, state.get("latest")):
             return "skip", "Update available"
+        if state.get("available"):
+            return "clear", ""
         return "skip", ""
     return "fetch", ""
+
+
+def remove_old_updater(directory):
+    """Delete the 1.3.1 cmd loop and its downloaded exe, if a failed update left them."""
+    if not directory:
+        return
+    for name in ("update-run.cmd", "GrokbotVoice-update.exe"):
+        try:
+            os.remove(os.path.join(directory, name))
+        except OSError:
+            pass
+
+
+def install_folder(localappdata=None):
+    root = localappdata or os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(root, "Grokbot Voice")
 
 
 def _download(url, dest, urlopen, timeout=120):
@@ -180,7 +217,7 @@ def _vbs_string(text):
     return '"' + str(text).replace('"', '""') + '"'
 
 
-def windows_script(pid, downloaded, destination):
+def windows_script(pid, downloaded, destination, staging="", install_dir="", start_exe=""):
     """Hidden script: wait until this process is gone, then replace the exe and start it.
 
     A cmd loop that pipes tasklist into find opens a console titled find "pid"
@@ -205,19 +242,27 @@ def windows_script(pid, downloaded, destination):
         "  If Not ProcessRunning(%d) Then Exit Do" % pid,
         "  WScript.Sleep 250",
         "Loop",
-        "copied = %s" % ("True" if same else "False"),
     ]
+    if staging and install_dir:
+        lines.extend([
+            "If fso.FolderExists(%s) Then" % _vbs_string(staging),
+            "  If fso.FolderExists(%s) Then fso.DeleteFolder %s, True" % (_vbs_string(install_dir), _vbs_string(install_dir)),
+            "  fso.CopyFolder %s, %s" % (_vbs_string(staging), _vbs_string(install_dir)),
+            "End If",
+        ])
+    lines.append("copied = %s" % ("True" if same else "False"))
     if not same:
         lines.extend([
             "If Not copied Then",
             "  copied = ReplaceExe(fso, %s, %s)" % (src, dst),
             "End If",
         ])
+    launch = start_exe or (downloaded if same else destination)
     lines.extend([
         "If copied Then",
-        "  shell.Run %s, 1, False" % _vbs_string('"' + (downloaded if same else destination) + '"'),
+        "  shell.Run %s, 1, False" % _vbs_string('"' + launch + '"'),
         "Else",
-        "  shell.Run %s, 1, False" % _vbs_string('"' + downloaded + '"'),
+        "  shell.Run %s, 1, False" % _vbs_string('"' + (start_exe or downloaded) + '"'),
         "End If",
         "On Error Resume Next",
         "fso.DeleteFile WScript.ScriptFullName, True",
@@ -306,17 +351,41 @@ def apply(result, system, pid, executable, frozen, directory, urlopen, log_path,
     popen = popen or subprocess.Popen
     os.makedirs(directory, exist_ok=True)
     if system == "win32":
-        url = str((result or {}).get("windows_url") or "")
-        if not url:
+        exe_url = str((result or {}).get("windows_url") or "")
+        zip_url = str((result or {}).get("zip_url") or "")
+        if not exe_url and not zip_url:
             raise RuntimeError("no Windows download on that release")
         downloaded = os.path.join(directory, "GrokbotVoice-update.exe")
-        _download(url, downloaded, urlopen)
-        with open(downloaded, "rb") as handle:
-            magic = handle.read(2)
-        if magic != b"MZ" or os.path.getsize(downloaded) < 100000:
-            raise RuntimeError("Windows download was not the program")
-        if frozen and str(executable or "").lower().endswith(".exe"):
-            destination = executable
+        if exe_url:
+            _download(exe_url, downloaded, urlopen)
+            with open(downloaded, "rb") as handle:
+                magic = handle.read(2)
+            if magic != b"MZ" or os.path.getsize(downloaded) < 100000:
+                raise RuntimeError("Windows download was not the program")
+        running = executable if frozen and str(executable or "").lower().endswith(".exe") else ""
+        onedir = bool(running) and os.path.isdir(os.path.join(os.path.dirname(running), "_internal"))
+        staging = ""
+        install = ""
+        start = ""
+        if zip_url:
+            zip_path = os.path.join(directory, "Grokbot-Voice-Windows.zip")
+            _download(zip_url, zip_path, urlopen)
+            with open(zip_path, "rb") as handle:
+                if handle.read(2) != b"PK":
+                    raise RuntimeError("Windows download was not the program")
+            staging = os.path.join(directory, "update-staging")
+            if os.path.isdir(staging):
+                shutil.rmtree(staging)
+            os.makedirs(staging)
+            with zipfile.ZipFile(zip_path) as archive:
+                archive.extractall(staging)
+            install = os.path.dirname(running) if onedir else install_folder()
+            start = os.path.join(install, "Grokbot Voice.exe")
+        if onedir:
+            downloaded = start or downloaded
+            destination = start or downloaded
+        elif running:
+            destination = running
         else:
             destination = downloaded
         script = os.path.join(directory, "update-run.vbs")
@@ -325,7 +394,7 @@ def apply(result, system, pid, executable, frozen, directory, urlopen, log_path,
         except OSError:
             pass
         with open(script, "w", encoding="utf-8", newline="") as handle:
-            handle.write(windows_script(pid, downloaded, destination))
+            handle.write(windows_script(pid, downloaded, destination, staging, install, start))
         root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
         wscript = os.path.join(root, "System32", "wscript.exe") if root else "wscript.exe"
         # //B is batch mode: no script errors and no console window.
