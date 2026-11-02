@@ -98,6 +98,52 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_two_quick_replies_during_playback_stay_in_order(self):
+        """Two new replies land in the open file while Back is holding an older line."""
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            key = "sand.client.slice.account.a.transcript.replicas.moya"
+            _blob(store, "sand.client.slice.account.a.roster.last-roster",
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya","selected":true}]}}')
+            _blob(store, key,
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"r1","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"Yes, it will work in Edge too."}},'
+                  '{"kind":"send-message","id":"r2","seq":2,"timestampMs":1700000002000,"message":{"type":"text","content":"The fix for reading the newest reply is being built."}}'
+                  ']}}')
+            lines, _names, keylists, active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keylists)
+            history = list(lines)
+            pos = len(history) - 1
+            path = _blob(store, key,
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r1","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"Yes, it will work in Edge too."}},'
+                         '{"kind":"send-message","id":"r2","seq":2,"timestampMs":1700000002000,"message":{"type":"text","content":"The fix for reading the newest reply is being built."}},'
+                         '{"kind":"send-message","id":"r3","seq":3,"timestampMs":1700000003000,"message":{"type":"text","content":"Good news. Just to check\\u2026"}},'
+                         '{"kind":"send-message","id":"r4","seq":4,"timestampMs":1700000004000,"message":{"type":"text","content":"Got it. It reads one new reply."}}'
+                         ']}}')
+            self.assertTrue(path.endswith(".blob"))
+            self.assertEqual(active, path)
+            lines, _names, keylists, still = grok_store.reply_snapshot(store)
+            self.assertEqual(still, active)
+            fresh = grok_store.merge_open_replies(history, seen, lines, keylists)
+            self.assertEqual(len(fresh), 2)
+            self.assertIn("Good news", fresh[0])
+            self.assertIn("Got it", fresh[1])
+            self.assertEqual(history[-2:], fresh)
+            self.assertLess(pos, len(history) - 1)
+            stepped = pos
+            heard = []
+            while stepped < len(history) - 1:
+                stepped += 1
+                heard.append(history[stepped])
+            self.assertEqual(heard, fresh)
+            self.assertIn("Got it", heard[-1])
+            self.assertEqual(grok_store.merge_open_replies(history, seen, lines, keylists), [])
+        finally:
+            shutil.rmtree(root)
+
     def test_speech_matches_the_screen(self):
         self.assertEqual(grok_store.render_speech("See [the docs](https://example.com/path)."), "See the docs.")
         self.assertNotIn("example.com", grok_store.render_speech("[label](https://example.com/path)"))

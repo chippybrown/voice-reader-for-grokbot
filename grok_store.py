@@ -1143,7 +1143,8 @@ def unseen_lines(seen, lines, keylists):
     """Lines whose message id or content hash has not been seen yet.
 
     Matching keys are recorded. A later rewrite that only changes seq or
-    order does not come back as a new reply.
+    order does not come back as a new reply. Two new replies in one file
+    are both returned, in order.
     """
     fresh = []
     for line, keys in zip(lines, keylists):
@@ -1152,6 +1153,17 @@ def unseen_lines(seen, lines, keylists):
             continue
         seen.update(keys)
         fresh.append(line)
+    return fresh
+
+
+def merge_open_replies(history, seen, lines, keylists):
+    """Append every new reply in the open chat, in order.
+
+    A second reply written into the same file is not dropped because the
+    first one was new too. Returns the lines that were added.
+    """
+    fresh = unseen_lines(seen, lines, keylists)
+    history.extend(fresh)
     return fresh
 
 
