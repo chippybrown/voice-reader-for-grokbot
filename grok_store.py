@@ -698,56 +698,85 @@ def _row_for(rows, account, agent_id):
     return None
 
 
-def active_transcript(directory, window_titles=None, directories=None):
-    """The conversation on screen now, checked again from the files every time.
+def _chat_was_opened(row):
+    """True when the transcript file was saved again without a new message.
 
-    A saved selection from an earlier bot or an earlier account must not pin
-    the reader. The window title wins when it names one bot, because that is
-    the chat Chip is looking at. Otherwise the account is the one whose
-    roster or selection was written last, not the transcript a background
-    bot just updated. Inside that account the newest selection wins, then a
-    roster row marked selected, then the newest message from the user, then
-    the newest file. Switching chats does not speak the backlog; the caller
-    marks the lines already in the new file as seen.
+    Opening a chat rewrites its file. A bot reply does not: the newest
+    message and the file time match. The window title is not used.
     """
-    slices, rows, names = _load_stores(_store_list(directory, directories))
+    newest = None
+    for entry in row["entries"]:
+        if isinstance(entry, dict) and isinstance(entry.get("timestampMs"), (int, float)):
+            stamp = entry["timestampMs"]
+            newest = stamp if newest is None else max(newest, stamp)
+    if newest is None:
+        return False
+    return row["stamp"] > (newest / 1000.0) + 5
+
+
+def _focused_opens(rows):
+    """The chat whose file was saved again well after the others, or none.
+
+    A sync that rewrites every transcript at once is not a bot switch.
+    """
+    opened = [row for row in rows if _chat_was_opened(row)]
+    if len(opened) <= 1:
+        return opened
+    opened.sort(key=lambda row: row["stamp"])
+    if opened[-1]["stamp"] > opened[-2]["stamp"] + 5:
+        return [opened[-1]]
+    return []
+
+
+def active_transcript(directory, window_titles=None, directories=None):
+    """The conversation on screen now, from the saved files only.
+
+    The window title is ignored on every platform. A bare "Grok Bot" title
+    names no bot, and a title that does is still not the source of truth.
+    The open chat is the transcript that was rewritten when it was shown,
+    if exactly one was. Otherwise it is the saved selection, then a roster
+    row marked selected, then the only transcript in the account. Several
+    chats and no fresh signal means we are not sure: return None so Back
+    stays quiet instead of playing a different bot.
+    """
+    del window_titles  # titles are not a signal; callers may still pass them
+    slices, rows, _names = _load_stores(_store_list(directory, directories))
     if not rows:
         return None
     accounts = _known_accounts(slices, rows)
     known = {row["agent_id"] for row in rows}
-    title_ids = set()
-    titled = agent_id_from_titles(window_titles, names)
-    if titled:
-        title_ids.add(titled)
-    account = None
-    title_accounts = {row["account"] for row in rows if row["agent_id"] in title_ids}
-    if len(title_accounts) == 1:
-        account = next(iter(title_accounts))
+    account = _freshest_account(slices, accounts)
     if account is None:
-        account = _freshest_account(slices, accounts)
+        present = {row["account"] for row in rows}
+        account = next(iter(present)) if len(present) == 1 else None
     if account is None:
-        latest = _latest_user_transcript(rows)
-        account = latest["account"] if latest is not None else rows[-1]["account"]
-    scoped = [row for row in rows if row["account"] == account] or rows
-    in_view = [row for row in scoped if row["agent_id"] in title_ids]
-    if len(in_view) == 1:
-        return in_view[0]
+        return None
+    scoped = [row for row in rows if row["account"] == account]
     hits = [hit for hit in _selection_hits(slices, accounts, known) if hit[2] in (None, account)]
-    if hits:
-        hits.sort()
-        _stamp, agent_id, hit_account = hits[-1]
-        chosen = _row_for(scoped, hit_account if hit_account == account else account, agent_id)
+    hits.sort()
+    selection_mtime = hits[-1][0] if hits else None
+    selection_id = hits[-1][1] if hits else None
+    opened = _focused_opens(scoped)
+    if len(opened) == 1 and (selection_mtime is None or opened[0]["stamp"] > selection_mtime + 0.5):
+        return opened[0]
+    if selection_id:
+        chosen = _row_for(scoped, account, selection_id)
         if chosen is not None:
             return chosen
     selected = _roster_selected_id(slices, account, known)
     chosen = _row_for(scoped, account, selected) if selected else None
     if chosen is not None:
         return chosen
-    latest = _latest_user_transcript(scoped)
-    if latest is not None:
-        return latest
-    scoped.sort(key=lambda row: row["stamp"])
-    return scoped[-1]
+    if len(scoped) == 1:
+        return scoped[0]
+    return None
+
+
+def latest_replay(lines):
+    """The reply Back plays for the chat that is open. None when that chat is unknown."""
+    if not lines:
+        return None
+    return lines[-1]
 
 
 def reply_snapshot(directory, window_titles=None, directories=None):
@@ -755,8 +784,8 @@ def reply_snapshot(directory, window_titles=None, directories=None):
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
-    window_titles are the live Grok Bot window titles. Every call re-reads
-    the stores, including after a bot switch or an account switch.
+    window_titles are ignored. Every call re-reads the stores. None for the
+    active file means the open chat is not known, so nothing should be spoken.
     """
     folders = _store_list(directory, directories)
     names = {}

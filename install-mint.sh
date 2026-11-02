@@ -237,6 +237,28 @@ sync_repo() {
   fi
 }
 
+preserve_xai_key() {
+  # The login keyring can be unreachable after a reinstall. Copy the key into
+  # the config folder first. Updates never delete that folder.
+  local config="${XDG_CONFIG_HOME:-${HOME}/.config}/grokbot-voice"
+  local file="${config}/xai-key"
+  local py="python3"
+  if [ -x "${DEST}/.venv/bin/python" ]; then
+    py="${DEST}/.venv/bin/python"
+  fi
+  if [ "$DRY" -eq 1 ]; then
+    say "dry-run: would keep the xAI key in ${file}"
+    return 0
+  fi
+  mkdir -p "$config"
+  XAI_KEY_FILE="$file" PYTHONPATH="${DEST}${PYTHONPATH:+:$PYTHONPATH}" \
+    "$py" -c 'import os, platform_linux; platform_linux.preserve_key_file(os.environ["XAI_KEY_FILE"])' \
+    || true
+  if [ -f "$file" ]; then
+    chmod 600 "$file" || true
+  fi
+}
+
 install_python() {
   local venv="${DEST}/.venv"
   say "Installing Python packages into ${venv}."
@@ -456,6 +478,7 @@ fi
 
 install_apt
 sync_repo
+preserve_xai_key
 install_python
 install_piper
 install_launchers

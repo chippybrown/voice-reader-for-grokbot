@@ -226,7 +226,7 @@ def piper_job(text, token, wait):
 def say(text, wait=False, bot=None):
     apply_bot_voice(bot)
     if text:
-        log("speak [%s] %s" % (speak_state.get("label", "?"), text[:60].replace("\n", " ")))
+        log("speak [%s] [%s] %s" % (bot or "?", speak_state.get("label", "?"), text[:60].replace("\n", " ")))
     stop_all()
     if not text:
         return
@@ -909,11 +909,38 @@ def tick():
         flags["pause"] = False
         state["paused"] = False
         say("")
+    def use_open_chat():
+        """Point history at the chat on screen. Empty history means we are not sure."""
+        cur, keys, active = chat_snapshot()
+        if active is None and not cur:
+            state["history"] = []
+            state["file_key"] = None
+            state["pos"] = None
+            state["queue"].clear()
+            state["prev_cur"] = []
+            return False
+        if active is not None and active != state.get("file_key"):
+            grok_store.mark_seen(state["seen"], keys)
+            state["history"] = list(cur)
+            state["file_key"] = active
+            state["prev_cur"] = list(cur)
+            state["queue"].clear()
+            state["pos"] = None
+            return True
+        if active is None:
+            state["history"] = list(cur)
+            state["file_key"] = None
+            state["pos"] = None
+            return bool(cur)
+        return True
+
     manual = None
     if flags["play"]:
         flags["play"] = False
         resuming = state["paused"]
-        if state["stopped"]:     # back to watching; anything already on screen is skipped
+        if not resuming and not use_open_chat():
+            say("")
+        elif state["stopped"]:     # back to watching; anything already on screen is skipped
             state["stopped"] = False
             state["history"] = absorb_current()
         history = state["history"]
@@ -923,13 +950,22 @@ def tick():
                 manual = shown
     if flags["back"]:
         flags["back"] = False
-        history = state["history"]
-        if history:
-            state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
-            state["queue"].clear()
-            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+        # Re-read before speaking. A switch replaces history with that bot's
+        # lines, and the first Back plays the latest one, even if it arrived
+        # before the switch. An unknown chat stays silent.
+        if not use_open_chat():
+            say("")
+        else:
+            history = state["history"]
+            if history:
+                state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
+                state["queue"].clear()
+                say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+            else:
+                say("")
     if flags["skip"]:   # Next
         flags["skip"] = False
+        use_open_chat()
         history = state["history"]
         if state["pos"] is not None and state["pos"] < len(history) - 1:
             state["pos"] += 1          # step forward through history
@@ -954,7 +990,13 @@ def tick():
         try:
             cur, keys, active = chat_snapshot()
             seen = state["seen"]
-            if active is not None:
+            if active is None and not cur:
+                state["history"] = []
+                state["file_key"] = None
+                state["pos"] = None
+                state["queue"].clear()
+                state["prev_cur"] = []
+            elif active is not None:
                 # Linux files: a new or rewritten chat is a baseline, like Stop then Play.
                 # Only ids that show up on a later look are read. Position is ignored.
                 if active != state.get("file_key"):
