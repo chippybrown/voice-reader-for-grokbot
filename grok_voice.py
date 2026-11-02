@@ -227,6 +227,9 @@ _auto_spoken = set()
 
 def say(text, wait=False, bot=None, replay=False):
     if text and not grok_store.allow_auto_speech(_auto_spoken, text, replay=replay):
+        if not replay:
+            reason = "already spoken this session" if grok_store.speech_key(text) else "nothing left to read"
+            log(grok_store.skip_log(reason, text))
         return
     apply_bot_voice(bot)
     if text:
@@ -896,8 +899,13 @@ fill_voice_menu()
 _lines, _keys, _active = chat_snapshot()
 _seen = set()
 grok_store.mark_seen(_seen, _keys)
+try:
+    # Other chats are history too. A reply that shows up later is the only new one.
+    grok_store.mark_seen(_seen, platform.all_reply_keys())
+except Exception:
+    pass
 state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
-         "file_key": _active, "prev_cur": list(_lines)}
+         "file_key": _active, "prev_cur": list(_lines), "explained": set()}
 
 def tick():
     if flags["quit"]:
@@ -917,8 +925,8 @@ def tick():
         """Point history at the chat on screen. Empty history means we are not sure."""
         cur, keys, active = chat_snapshot()
         if active is None and not cur:
+            # Back stays quiet. Keep file_key so a later reply in that chat is still read.
             state["history"] = []
-            state["file_key"] = None
             state["pos"] = None
             state["queue"].clear()
             state["prev_cur"] = []
@@ -992,18 +1000,37 @@ def tick():
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
-            cur, keys, active = chat_snapshot()
+            cur, names, keys, active, skipped = platform.watch_snapshot(state["seen"], state.get("file_key"))
+            remember_names(names)
+            kept_lines = []
+            kept_keys = []
+            for line, keyset in zip(cur, keys):
+                if announce(line).strip():
+                    kept_lines.append(line)
+                    kept_keys.append(tuple(keyset))
+                elif not any(key in state["seen"] for key in keyset):
+                    token = tuple(keyset)
+                    if token not in state["explained"]:
+                        state["explained"].add(token)
+                        log(grok_store.skip_log("nothing left to read", line))
+            cur, keys = kept_lines, kept_keys
+            for keyset, reason, preview in skipped:
+                token = tuple(keyset)
+                if token not in state["explained"]:
+                    state["explained"].add(token)
+                    log(grok_store.skip_log(reason, preview))
             seen = state["seen"]
-            if active is None and not cur:
-                state["history"] = []
-                state["file_key"] = None
-                state["pos"] = None
-                state["queue"].clear()
-                state["prev_cur"] = []
-            elif active is not None:
-                # Linux files: a new or rewritten chat is a baseline, like Stop then Play.
-                # Only ids that show up on a later look are read. Position is ignored.
-                if active != state.get("file_key"):
+            if active is not None:
+                # A different chat that is still on disk replaces history and
+                # is not read aloud. The same file, or the first file we can
+                # lock onto, speaks replies that arrived after launch.
+                previous = state.get("file_key")
+                if previous and not os.path.exists(previous):
+                    previous = None
+                    state["history"] = []
+                    state["file_key"] = None
+                moved = previous and active != previous
+                if moved:
                     state["file_key"] = active
                     grok_store.mark_seen(seen, keys)
                     state["history"] = list(cur)
@@ -1011,11 +1038,19 @@ def tick():
                     state["queue"].clear()
                     state["pos"] = None
                 else:
-                    for line in grok_store.unseen_lines(seen, cur, keys):
-                        state["history"].append(line)
+                    fresh = grok_store.unseen_lines(seen, cur, keys)
+                    if not state.get("file_key"):
+                        state["history"] = list(cur)
+                        state["prev_cur"] = list(cur)
                         state["pos"] = None
+                    else:
+                        for line in fresh:
+                            state["history"].append(line)
+                            state["pos"] = None
+                    state["file_key"] = active
+                    for line in fresh:
                         state["queue"].append(line)
-            else:
+            elif cur:
                 known = [i for i, reply in enumerate(cur) if reply in seen]
                 prev = state.get("prev_cur", [])
                 if grok_store.launch_is_baseline(seen, cur, prev):
@@ -1059,8 +1094,13 @@ def tick():
                         state["history"].append(reply)
                         state["pos"] = None
                         state["queue"].append(reply)
-        except Exception:
-            pass
+            elif state.get("file_key") and not os.path.exists(state["file_key"]):
+                state["file_key"] = None
+        except Exception as exc:
+            message = repr(exc)
+            if state.get("watch_error") != message:
+                state["watch_error"] = message
+                log("watch problem: %s" % message)
     speaking = is_speaking()
     if state["queue"] and not speaking and not state["paused"] and not state["stopped"]:
         pending = state["queue"].pop(0)

@@ -360,20 +360,42 @@ def grok_window_titles():
     return []
 
 
+def chat_folders():
+    return grok_store.linux_chat_dirs(config_dir())
+
+
+def _window_titles():
+    try:
+        return grok_window_titles()
+    except Exception:
+        return []
+
+
 def read_snapshot():
     """Lines, names, stable keys, and the active transcript path.
 
     Every existing chat folder is read again, so an account that lives in
     a different folder is visible the moment its files appear.
     """
-    folders = grok_store.linux_chat_dirs(config_dir())
+    folders = chat_folders()
     if not folders:
         return [], [], [], None
-    try:
-        titles = grok_window_titles()
-    except Exception:
-        titles = []
-    return grok_store.reply_snapshot(None, window_titles=titles, directories=folders)
+    return grok_store.reply_snapshot(None, window_titles=_window_titles(), directories=folders)
+
+
+def all_reply_keys():
+    """Every reply already saved, so launch can treat them as history."""
+    return grok_store.every_reply_keylists(None, directories=chat_folders())
+
+
+def watch_snapshot(seen, follow_path):
+    """Automatic read. Keeps a new reply when the open chat is not proven."""
+    folders = chat_folders()
+    if not folders:
+        lines, names, keys, active = read_snapshot()
+        return lines, names, keys, active, []
+    return grok_store.watch_snapshot(
+        None, window_titles=_window_titles(), directories=folders, seen=seen, follow_path=follow_path)
 
 
 def install_hotkeys(flags):
