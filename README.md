@@ -4,14 +4,14 @@
 
 ### Windows
 
-Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and double-click it. There is no installer, and it does not need an administrator password. Close the old copy first. The first start copies the program into `%LOCALAPPDATA%\Grokbot Voice`. Later starts open that copy, so Windows does not unpack the whole program on every launch.
+Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and double-click it. There is no installer, and it does not need an administrator password. Close the old copy first. The first start copies the program into `%LOCALAPPDATA%\Grokbot Voice\app`. Later starts open that copy, so Windows does not unpack the whole program on every launch.
 
 Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
 
 If a window titled `find` keeps coming back from the old 1.3.1 updater, paste this into PowerShell. It closes the app and that updater, deletes the stuck files, downloads the latest program, and starts it.
 
 ```powershell
-Stop-Process -Name 'Grokbot Voice','Grokbot.Voice' -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like '*update-run.cmd*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -Force -ErrorAction SilentlyContinue "$env:APPDATA\Grok Voice\update-run.cmd", "$env:APPDATA\Grok Voice\GrokbotVoice-update.exe"; $dir = "$env:LOCALAPPDATA\Grokbot Voice"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $zip = Join-Path $env:TEMP 'Grokbot-Voice-Windows.zip'; Invoke-WebRequest -Uri 'https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot-Voice-Windows.zip' -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $dir -Force; Start-Process "$dir\Grokbot Voice.exe"
+Stop-Process -Name 'Grokbot Voice','Grokbot.Voice' -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like '*update-run.cmd*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -Force -ErrorAction SilentlyContinue "$env:APPDATA\Grok Voice\update-run.cmd", "$env:APPDATA\Grok Voice\GrokbotVoice-update.exe"; $dir = "$env:LOCALAPPDATA\Grokbot Voice"; $app = Join-Path $dir 'app'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $zip = Join-Path $env:TEMP 'Grokbot-Voice-Windows.zip'; Invoke-WebRequest -Uri 'https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot-Voice-Windows.zip' -OutFile $zip; $unpack = Join-Path $env:TEMP 'Grokbot-Voice-unpack'; if (Test-Path $unpack) { Remove-Item $unpack -Recurse -Force }; Expand-Archive -Path $zip -DestinationPath $unpack -Force; if (Test-Path $app) { Remove-Item $app -Recurse -Force }; Move-Item (Join-Path $unpack 'app') $app; Copy-Item (Join-Path $unpack 'Grokbot Voice.exe') (Join-Path $dir 'Grokbot.Voice.exe') -Force; if (Test-Path (Join-Path $dir '_internal')) { Remove-Item (Join-Path $dir '_internal') -Recurse -Force }; Start-Process (Join-Path $app 'Grokbot Voice.exe')
 ```
 
 ### Linux Mint
@@ -109,7 +109,7 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 
 On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, per-bot voices, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
 
-The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.4**.
+The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.5**.
 
 ## Build from source
 
