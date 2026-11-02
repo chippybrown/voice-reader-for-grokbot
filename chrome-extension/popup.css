@@ -13,16 +13,26 @@ body {
 }
 
 h1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
   font-size: 15px;
   font-weight: 650;
 }
 
+#version {
+  font-size: 12px;
+  font-weight: 500;
+  color: #5c6b63;
+}
+
 #status {
-  min-height: 4.2em;
+  min-height: 4.8em;
   margin: 6px 0 12px;
   color: #3d4a44;
-  white-space: normal;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

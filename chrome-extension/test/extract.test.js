@@ -169,3 +169,63 @@ test("the last assistant message is chosen, and a newer one is spoken", { timeou
     await browser.close().catch(() => {});
   }
 });
+
+test("open shadow root streamdown reply is found", { timeout: 30000 }, async () => {
+  const browser = await puppeteer.launch({
+    executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html><body>
+      <div id="host"></div>
+      <div style="display:flex;justify-content:flex-end"><div style="background:#6d28d9;color:#fff;padding:8px"><p dir="auto">User fallback text.</p></div></div>
+      <div style="display:flex;justify-content:flex-start"><div style="background:#2b2e36;color:#fff;padding:8px"><p dir="auto">Assistant fallback text.</p></div></div>
+    </body>`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      const root = document.getElementById("host").attachShadow({ mode: "open" });
+      root.innerHTML = '<div style="display:flex;justify-content:flex-start"><div style="background:#2b2e36;color:#fff;padding:8px"><p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space:pre-wrap">Shadow assistant reply.</p></div></div>';
+    });
+    for (const file of ["src/config.js", "src/text.js", "src/detect.js"]) {
+      await page.addScriptTag({ path: path.join(root, file) });
+    }
+    const result = await page.evaluate(() => {
+      const report = globalThis.GrokVoice.inspectAssistant(document);
+      return {
+        mode: report.mode,
+        speeches: report.replies.map((reply) => reply.speech)
+      };
+    });
+    assert.equal(result.mode, "streamdown");
+    assert.deepEqual(result.speeches, ["Shadow assistant reply."]);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+test("fallback reads dir=auto bubbles when no streamdown class exists", { timeout: 30000 }, async () => {
+  const browser = await puppeteer.launch({
+    executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html><body>
+      <div style="display:flex;justify-content:flex-end"><div style="background:#6d28d9;color:#fff;padding:8px"><p dir="auto">User fallback text.</p></div></div>
+      <div style="display:flex;justify-content:flex-start"><div style="background:#2b2e36;color:#fff;padding:8px"><p dir="auto">Assistant fallback text.</p></div></div>
+    </body>`, { waitUntil: "domcontentloaded" });
+    for (const file of ["src/config.js", "src/text.js", "src/detect.js"]) {
+      await page.addScriptTag({ path: path.join(root, file) });
+    }
+    const result = await page.evaluate(() => {
+      const report = globalThis.GrokVoice.inspectAssistant(document);
+      return { mode: report.mode, speeches: report.replies.map((reply) => reply.speech) };
+    });
+    assert.equal(result.mode, "fallback");
+    assert.deepEqual(result.speeches, ["Assistant fallback text."]);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});

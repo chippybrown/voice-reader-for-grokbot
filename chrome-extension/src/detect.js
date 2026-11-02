@@ -313,7 +313,10 @@
 
   function includeBlock(el, row) {
     if (!el || ignored(el)) return false;
-    if (el.tagName === "P") return isStreamdownParagraph(el);
+    if (el.tagName === "P") {
+      var dir = (el.getAttribute("dir") || "").toLowerCase();
+      return dir === "auto" && plainText(el).length > 0;
+    }
     if (!EXTRA_TAG[el.tagName]) return false;
     var box = markdownBox(el);
     var paras = row.querySelectorAll("p[dir='auto']");
@@ -351,11 +354,11 @@
     return parts.join(" ");
   };
 
-  function collectStreamdownParagraphs(rootNode, found) {
+  function collectParagraphs(rootNode, found, selector) {
     if (!rootNode || !rootNode.querySelectorAll) return;
     var nodes = [];
     try {
-      nodes = rootNode.querySelectorAll('p[dir="auto"][class*="streamdown"]');
+      nodes = rootNode.querySelectorAll(selector);
     } catch (err) {
       nodes = [];
     }
@@ -363,20 +366,18 @@
     for (i = 0; i < nodes.length; i++) {
       if (!ignored(nodes[i]) && GV.visibleRaw(nodes[i])) found.push(nodes[i]);
     }
-    var all = rootNode.querySelectorAll("*");
+    var all = [];
+    try {
+      all = rootNode.querySelectorAll("*");
+    } catch (err) {
+      all = [];
+    }
     for (i = 0; i < all.length; i++) {
-      if (all[i].shadowRoot) collectStreamdownParagraphs(all[i].shadowRoot, found);
+      if (all[i].shadowRoot) collectParagraphs(all[i].shadowRoot, found, selector);
     }
   }
 
-  // Every Streamdown paragraph in the document, grouped by its nearest bubble.
-  // The last group is the bottom-most assistant reply. Recomputed from scratch.
-  GV.inspectAssistant = function inspectAssistant(doc) {
-    var body = doc.body || doc.documentElement;
-    var empty = { blockCount: 0, replies: [] };
-    if (!body) return empty;
-    var paragraphs = [];
-    collectStreamdownParagraphs(body, paragraphs);
+  function groupParagraphs(paragraphs) {
     var order = [];
     var grouped = new Map();
     var i;
@@ -407,7 +408,27 @@
       if (pos & 2) return 1;
       return 0;
     });
-    return { blockCount: paragraphs.length, replies: replies };
+    return replies;
+  }
+
+  // Every matching paragraph in this frame, including open shadow roots.
+  // Streamdown is preferred. If that matches nothing, p[dir=auto] bubbles are used.
+  GV.inspectAssistant = function inspectAssistant(doc) {
+    var body = doc.body || doc.documentElement;
+    var empty = { blockCount: 0, replies: [], mode: "streamdown" };
+    if (!body) return empty;
+    var paragraphs = [];
+    collectParagraphs(body, paragraphs, 'p[dir="auto"][class*="streamdown"]');
+    var mode = "streamdown";
+    if (!paragraphs.length) {
+      mode = "fallback";
+      collectParagraphs(body, paragraphs, 'p[dir="auto"]');
+    }
+    return {
+      blockCount: paragraphs.length,
+      replies: groupParagraphs(paragraphs),
+      mode: mode
+    };
   };
 
   GV.detectAssistantReplies = function detectAssistantReplies(doc) {

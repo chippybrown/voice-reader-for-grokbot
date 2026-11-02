@@ -31,6 +31,10 @@ test("match list is valid and copied into the manifest", () => {
   for (const pattern of GV.MATCHES) assert.equal(GV.patternValid(pattern), true);
   assert.deepEqual(manifest.host_permissions, Array.from(GV.MATCHES));
   assert.deepEqual(manifest.content_scripts[0].matches, Array.from(GV.MATCHES));
+  assert.equal(manifest.content_scripts[0].all_frames, true);
+  assert.equal(manifest.content_scripts[0].match_about_blank, true);
+  assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
+  assert.equal(manifest.version, "0.1.2");
   assert.deepEqual(manifest.content_scripts[0].js, [
     "src/config.js",
     "src/text.js",
@@ -46,6 +50,8 @@ test("url match list covers Grok hosts and not other sites", () => {
   assert.equal(GV.urlMatches("https://grok.com/bot/3f1c0c2e-7a1b-4c89-9d2e-111111111111"), true);
   assert.equal(GV.urlMatches("https://grok.x.ai/"), true);
   assert.equal(GV.urlMatches("https://preview.grok.com/c/1"), true);
+  assert.equal(GV.urlMatches("https://cursor.com/agents"), true);
+  assert.equal(GV.urlMatches("https://api.x.ai/v1"), true);
   assert.equal(GV.urlMatches("https://example.com/"), false);
   assert.equal(GV.urlMatches("https://notgrok.com/"), false);
   assert.equal(GV.urlMatches("https://grok.com.evil.com/"), false);

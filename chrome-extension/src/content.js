@@ -156,15 +156,19 @@
     return text.slice(0, 60);
   }
 
+  var lastLogLine = "";
+
   function logResolve() {
-    if (!debug) return;
+    var line = "[GrokVoice] frame=" + location.href
+      + " blocks=" + lastDetect.blocks
+      + " groups=" + lastDetect.groups
+      + " mode=" + (lastDetect.mode || "")
+      + " chosen=\"" + lastDetect.snippet + "\""
+      + " skip=" + lastDetect.reason;
+    if (!debug && line === lastLogLine) return;
+    lastLogLine = line;
     try {
-      console.log(
-        "[GrokVoice] blocks=" + lastDetect.blocks +
-        " groups=" + lastDetect.groups +
-        " chosen=\"" + lastDetect.snippet + "\"" +
-        " skip=" + lastDetect.reason
-      );
+      console.log(line);
     } catch (err) {
       // Logging is only a debugging aid.
     }
@@ -175,6 +179,7 @@
     var latest = replies.length ? replies[replies.length - 1] : null;
     lastDetect.blocks = report.blockCount || 0;
     lastDetect.groups = replies.length;
+    lastDetect.mode = report.mode || "";
     lastDetect.snippet = snippetOf(latest ? latest.speech : "");
     lastDetect.reason = reason;
     var rootNode = document.documentElement;
@@ -183,6 +188,15 @@
       rootNode.setAttribute("data-grok-voice-snippet", lastDetect.snippet);
     }
     logResolve();
+    safeSend({
+      type: "frame-report",
+      href: location.href,
+      blocks: lastDetect.blocks,
+      groups: lastDetect.groups,
+      snippet: lastDetect.snippet,
+      reason: lastDetect.reason,
+      mode: lastDetect.mode
+    });
   }
 
   function updateDebug(replies) {
@@ -331,8 +345,9 @@
       rate = GV.clampRate(stored.rate);
       debug = stored.debug === true;
       applyEnabled(stored.enabled !== false);
-      if (debug) scheduleScan();
+      scheduleScan();
     });
+    setInterval(scheduleScan, 1000);
   }
 
   document.addEventListener("pointerdown", flushQueued, true);

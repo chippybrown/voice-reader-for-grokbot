@@ -37,61 +37,38 @@
     if (voiceSelect.value !== previous) voiceSelect.value = "";
   }
 
-  function activeTab() {
-    return chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
-      return tabs[0] || null;
+  function askBackground(message) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage(message, function (response) {
+          void chrome.runtime.lastError;
+          resolve(response || null);
+        });
+      } catch (err) {
+        resolve(null);
+      }
     });
   }
 
-  function send(type) {
-    return activeTab().then(function (tab) {
-      if (!tab || tab.id == null) return { tab: null, response: null, missing: false };
-      return new Promise(function (resolve) {
-        try {
-          chrome.tabs.sendMessage(tab.id, { type: type }, function (response) {
-            var missing = Boolean(chrome.runtime.lastError);
-            resolve({
-              tab: tab,
-              response: missing ? null : (response || null),
-              missing: missing
-            });
-          });
-        } catch (err) {
-          resolve({ tab: tab, response: null, missing: true });
-        }
-      });
-    }, function () {
-      return { tab: null, response: null, missing: true };
-    });
-  }
-
-  function detectedLine(response) {
-    var count = Number(response.detected);
-    if (!isFinite(count)) count = 0;
-    var line = count === 1 ? "1 reply detected." : count + " replies detected.";
-    if (response.snippet) line += " Last: " + response.snippet;
-    if (response.reason === "no-streamdown-blocks") line += " No Streamdown text found.";
-    else if (response.reason === "historical") line += " Already on the page.";
-    else if (response.reason === "waiting") line += " Waiting until it settles.";
-    else if (response.reason === "spoke" || response.reason === "already-spoken") line += " Spoken.";
+  function frameLine(frame) {
+    var count = Number(frame.groups) || 0;
+    var line = (frame.url || "frame") + " — " + count + (count === 1 ? " reply" : " replies");
+    if (frame.snippet) line += ". Last: " + frame.snippet;
+    if (frame.mode === "fallback") line += " (no streamdown class)";
     return line;
   }
 
   function refreshStatus() {
-    send("status").then(function (result) {
-      var tab = result.tab;
-      var response = result.response;
-      var url = tab && tab.url ? tab.url : "";
-      if (result.missing && url && GV.urlMatches(url)) {
-        setStatus("Reload this Grok tab so reading can start.");
-        return;
-      }
+    askBackground({ type: "popup-status" }).then(function (response) {
       if (!response || !response.ok) {
         setStatus("This tab is not a Grok chat.");
         return;
       }
-      var prefix = response.enabled ? "On. " : "Off. ";
-      setStatus(prefix + detectedLine(response));
+      var lines = [response.enabled ? "On." : "Off."];
+      var frames = response.frames || [];
+      if (!frames.length) lines.push("0 replies detected. No frame has reported yet.");
+      else frames.forEach(function (frame) { lines.push(frameLine(frame)); });
+      setStatus(lines.join("\n"));
     });
   }
 
@@ -121,18 +98,23 @@
   });
 
   document.getElementById("stop").addEventListener("click", function () {
-    send("stop").then(function (result) {
-      if (result.missing) setStatus("Nothing is speaking in this tab.");
-      else setStatus("Stopped.");
+    askBackground({ type: "broadcast", command: "stop" }).then(function () {
+      setStatus("Stopped.");
     });
   });
 
   document.getElementById("replay").addEventListener("click", function () {
-    send("replay").then(function (result) {
-      if (result.response && result.response.ok) setStatus("Replaying the last reply.");
+    askBackground({ type: "broadcast", command: "replay" }).then(function (response) {
+      if (response && response.text) setStatus("Replaying the last reply.");
       else setStatus("Nothing to replay yet.");
     });
   });
+
+  try {
+    document.getElementById("version").textContent = chrome.runtime.getManifest().version;
+  } catch (err) {
+    document.getElementById("version").textContent = "";
+  }
 
   chrome.storage.local.get(GV.DEFAULTS, function (stored) {
     enabledInput.checked = stored.enabled !== false;

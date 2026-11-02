@@ -2,6 +2,21 @@
 importScripts("config.js", "text.js");
 
 var GV = globalThis.GrokVoice;
+var framesByTab = {};
+globalThis.frameReportsFor = function (tabId) {
+  var bucket = framesByTab[tabId] || {};
+  var reports = [];
+  for (var key in bucket) {
+    if (Object.prototype.hasOwnProperty.call(bucket, key)) reports.push(bucket[key]);
+  }
+  reports.sort(function (a, b) { return a.frameId - b.frameId; });
+  return reports;
+};
+
+function rememberFrame(tabId, frameId, report) {
+  if (!framesByTab[tabId]) framesByTab[tabId] = {};
+  framesByTab[tabId][frameId] = report;
+}
 
 function showOn(tabId) {
   chrome.action.setBadgeText({ tabId: tabId, text: "ON" });
@@ -50,8 +65,68 @@ chrome.storage.onChanged.addListener(function (changes, area) {
   if (area === "local" && changes.enabled) refreshAll();
 });
 
+chrome.tabs.onRemoved.addListener(function (tabId) {
+  delete framesByTab[tabId];
+});
+
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
-  if (!message || message.type !== "watch-state" || !sender.tab) return;
+  if (!message) return;
+  if (message.type === "frame-report" && sender.tab) {
+    rememberFrame(sender.tab.id, sender.frameId, {
+      frameId: sender.frameId,
+      url: message.href || sender.url || "",
+      blocks: message.blocks || 0,
+      groups: message.groups || 0,
+      snippet: message.snippet || "",
+      reason: message.reason || "",
+      mode: message.mode || ""
+    });
+    try { sendResponse({ ok: true }); } catch (err) { /* port closed */ }
+    return;
+  }
+  if (message.type === "popup-status") {
+    chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
+      var tab = tabs[0];
+      return chrome.storage.local.get(GV.DEFAULTS).then(function (stored) {
+        sendResponse({
+          ok: true,
+          enabled: stored.enabled !== false,
+          frames: tab ? globalThis.frameReportsFor(tab.id) : []
+        });
+      });
+    }).catch(function () {
+      try { sendResponse({ ok: false, frames: [] }); } catch (err) { /* port closed */ }
+    });
+    return true;
+  }
+  if (message.type === "broadcast" && sender.tab == null) {
+    chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
+      var tab = tabs[0];
+      if (!tab) {
+        sendResponse({ ok: false });
+        return;
+      }
+      var reports = globalThis.frameReportsFor(tab.id);
+      var ids = reports.map(function (report) { return report.frameId; });
+      if (!ids.length) ids = [0];
+      var pending = ids.length;
+      var text = "";
+      ids.forEach(function (frameId) {
+        chrome.tabs.sendMessage(tab.id, { type: message.command }, { frameId: frameId }, function (response) {
+          void chrome.runtime.lastError;
+          if (response && response.text) text = response.text;
+          pending -= 1;
+          if (!pending) {
+            try { sendResponse({ ok: Boolean(text) || message.command === "stop", text: text }); } catch (err) { /* port closed */ }
+          }
+        });
+      });
+    }).catch(function () {
+      try { sendResponse({ ok: false }); } catch (err) { /* port closed */ }
+    });
+    return true;
+  }
+  if (message.type !== "watch-state" || !sender.tab) return;
   try {
     if (message.enabled) showOn(sender.tab.id);
     else chrome.action.setBadgeText({ tabId: sender.tab.id, text: "" });

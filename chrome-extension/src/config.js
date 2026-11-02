@@ -2,8 +2,9 @@
 // under host_permissions and content_scripts[0].matches. npm test fails
 // if the three copies drift.
 //
-// https://grok.com/bot/* is a Grok Bot web chat (grok.com/bot/<id>).
-// https://grok.com/* stays as well, so other Grok pages still match.
+// https://grok.com/* covers grok.com/bot/<id>. Paths narrower than /* cannot
+// be used together with match_origin_as_fallback, which is what lets the
+// script run in about:blank and srcdoc frames.
 // Chrome ignores the path on a host permission and grants the whole host.
 // Do not add https://x.com/* unless the extension should read all of X.
 //
@@ -18,11 +19,14 @@
   var GV = root.GrokVoice || (root.GrokVoice = {});
 
   GV.MATCHES = [
-    "https://grok.com/bot/*",
     "https://grok.com/*",
     "https://*.grok.com/*",
+    "https://x.ai/*",
+    "https://*.x.ai/*",
     "https://grok.x.ai/*",
-    "https://*.grok.x.ai/*"
+    "https://*.grok.x.ai/*",
+    "https://cursor.com/*",
+    "https://*.cursor.com/*"
   ];
 
   // Substring on the renderer class, as in streamdown-first-block:mt-0.

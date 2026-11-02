@@ -151,7 +151,7 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
     assert.equal(outlined.includes("The newest answer is ready"), true);
     assert.equal(outlined.includes("Do not read"), false);
     assert.equal(outlined.includes("Moya"), false);
-    assert.equal(logs.some((line) => line.indexOf("[GrokVoice] blocks=") !== -1), true);
+    assert.equal(logs.some((line) => line.indexOf("[GrokVoice]") !== -1 && line.indexOf("blocks=") !== -1), true);
   } finally {
     await browser.close().catch(() => {});
   }
@@ -223,6 +223,147 @@ test("a chat container inserted after startup is read", { timeout: 30000 }, asyn
     assert.equal(detected.count, "2");
     assert.equal(detected.snippet.includes("The newest late reply"), true);
     assert.equal(detected.snippet.includes("First late reply"), false);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+const nestedPage = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Nested chat</title></head>
+<body>
+  <div id="shadow-host"></div>
+  <iframe id="chat-frame" title="chat"></iframe>
+  <script>
+    window.mountNested = function () {
+      document.getElementById("shadow-host").attachShadow({ mode: "open" });
+      document.getElementById("chat-frame").srcdoc = '<!DOCTYPE html><html><body><div id="slot"></div></body></html>';
+    };
+    window.addShadowReply = function () {
+      document.getElementById("shadow-host").shadowRoot.innerHTML = '<div style="display:flex;justify-content:flex-start"><div style="background:#2b2e36;color:#fff;padding:10px;border-radius:16px"><p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space:pre-wrap">Shadow assistant reply should be spoken.</p></div></div>';
+    };
+    window.iframeReplyHtml = '<div style="display:flex;justify-content:flex-end"><div style="background:#6d28d9;color:#fff;padding:10px"><p dir="auto" class="break-words streamdown-first-block:mt-0">User text in the frame.</p></div></div><div style="display:flex;justify-content:flex-start"><div style="background:#2b2e36;color:#fff;padding:10px;border-radius:16px"><p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space:pre-wrap">Iframe assistant reply should be spoken.</p></div></div>';
+  </script>
+</body></html>`;
+
+test("shadow root and iframe chats are both detected", { timeout: 45000 }, async () => {
+  const { browser } = await launch();
+  try {
+    const page = await browser.newPage();
+    const client = await page.createCDPSession();
+    const pendingIds = new Set();
+    const worldIds = [];
+    client.on("Runtime.executionContextCreated", (event) => {
+      const context = event.context;
+      if (context.auxData && context.auxData.type === "isolated") pendingIds.add(context.id);
+    });
+    await client.send("Runtime.enable");
+    async function stubNewWorlds() {
+      for (const id of Array.from(pendingIds)) {
+        if (worldIds.indexOf(id) !== -1) {
+          pendingIds.delete(id);
+          continue;
+        }
+        try {
+          const probed = await client.send("Runtime.evaluate", {
+            contextId: id,
+            expression: "typeof globalThis.GrokVoice",
+            returnByValue: true
+          });
+          if (!probed.result || probed.result.value !== "object") continue;
+          await client.send("Runtime.evaluate", {
+            contextId: id,
+            expression: `(() => {
+              const spoken = [];
+              globalThis.__grokVoiceSpoken = spoken;
+              function record(utterance) { spoken.push(String(utterance && utterance.text || "")); }
+              const proto = globalThis.SpeechSynthesis && globalThis.SpeechSynthesis.prototype;
+              if (proto) { proto.speak = record; proto.cancel = function () {}; }
+              const synth = globalThis.speechSynthesis;
+              if (synth) {
+                try { synth.speak = record; } catch (err) {}
+                try { synth.cancel = function () {}; } catch (err) {}
+              }
+            })()`
+          });
+          worldIds.push(id);
+          pendingIds.delete(id);
+        } catch (err) {
+          pendingIds.delete(id);
+        }
+      }
+    }
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (request.url().startsWith("https://grok.com/")) {
+        request.respond({
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: nestedPage
+        }).catch(() => {});
+        return;
+      }
+      request.continue().catch(() => {});
+    });
+    await page.goto("https://grok.com/nested-chat", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("html[data-grok-voice-armed='1']", { timeout: 10000 });
+    await delay(300);
+    await stubNewWorlds();
+    await page.evaluate(() => window.mountNested());
+    let child = null;
+    for (let i = 0; i < 30; i++) {
+      child = page.frames().find((frame) => frame.url() === "about:srcdoc");
+      if (child) {
+        const armed = await child.evaluate(() => document.documentElement.getAttribute("data-grok-voice-armed")).catch(() => null);
+        if (armed === "1") break;
+      }
+      await delay(100);
+    }
+    assert.ok(child, "srcdoc frame was not created");
+    await stubNewWorlds();
+    await child.evaluate((html) => {
+      document.getElementById("slot").innerHTML = html;
+    }, await page.evaluate(() => window.iframeReplyHtml));
+    await page.evaluate(() => window.addShadowReply());
+    let spoken = [];
+    for (let i = 0; i < 40; i++) {
+      await stubNewWorlds();
+      spoken = [];
+      const liveIds = worldIds.slice();
+      for (const id of liveIds) {
+        try {
+          const result = await client.send("Runtime.evaluate", {
+            contextId: id,
+            expression: "globalThis.__grokVoiceSpoken || []",
+            returnByValue: true
+          });
+          const list = result.result && result.result.value;
+          if (Array.isArray(list)) spoken.push(...list);
+        } catch (err) {
+          const index = worldIds.indexOf(id);
+          if (index !== -1) worldIds.splice(index, 1);
+        }
+      }
+      if (spoken.includes("Shadow assistant reply should be spoken.") && spoken.includes("Iframe assistant reply should be spoken.")) break;
+      await delay(150);
+    }
+    assert.equal(spoken.includes("Shadow assistant reply should be spoken."), true);
+    child = page.frames().find((frame) => frame.url() === "about:srcdoc");
+    const frameState = child ? await child.evaluate(() => ({
+      detected: document.documentElement.getAttribute("data-grok-voice-detected"),
+      snippet: document.documentElement.getAttribute("data-grok-voice-snippet"),
+      armed: document.documentElement.getAttribute("data-grok-voice-armed"),
+      html: document.body ? document.body.innerHTML.slice(0, 400) : ""
+    })) : null;
+    assert.equal(
+      spoken.includes("Iframe assistant reply should be spoken."),
+      true,
+      JSON.stringify({ spoken, worlds: worldIds.length, frameState })
+    );
+    assert.equal(spoken.includes("User text in the frame."), false);
+    const snippet = frameState && frameState.snippet;
+    assert.equal(String(snippet).includes("Iframe assistant reply"), true);
+    const topSnippet = await page.$eval("html", (el) => el.getAttribute("data-grok-voice-snippet"));
+    assert.equal(String(topSnippet).includes("Shadow assistant reply"), true);
   } finally {
     await browser.close().catch(() => {});
   }
