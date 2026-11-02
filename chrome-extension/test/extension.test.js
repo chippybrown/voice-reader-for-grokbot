@@ -135,7 +135,7 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
 
     const spoken = await waitForSpoken(world);
     assert.deepEqual(spoken, [expected]);
-    for (const banned of ["stay quiet", "Still old", "Hidden secret", "CSSHIDDEN", "Aria hidden", "Do not read", "What was already asked", "File menu", "Tooltip hint", "example.com", "secret-path", "*", "`"]) {
+    for (const banned of ["stay quiet", "Still old", "Hidden secret", "CSSHIDDEN", "Aria hidden", "Do not read", "What was already asked", "File menu", "Tooltip hint", "Moya", "2:14", "2:15", "Copy", "example.com", "secret-path", "*", "`"]) {
       assert.equal(spoken[0].includes(banned), false, banned);
     }
 
@@ -150,6 +150,7 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
     const outlined = await page.$eval(".grok-voice-debug-target", (el) => el.innerText);
     assert.equal(outlined.includes("The newest answer is ready"), true);
     assert.equal(outlined.includes("Do not read"), false);
+    assert.equal(outlined.includes("Moya"), false);
     assert.equal(logs.some((line) => line.includes("[Grok Voice Reader] latest assistant reply:")), true);
   } finally {
     await browser.close().catch(() => {});

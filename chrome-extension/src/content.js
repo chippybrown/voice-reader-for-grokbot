@@ -14,6 +14,7 @@
   var shadowObservers = new WeakSet();
   var debugEl = null;
   var DEBUG_CLASS = "grok-voice-debug-target";
+  var queuedSpeech = "";
 
   var session = GV.createSession({
     settleMs: GV.SETTLE_MS,
@@ -31,15 +32,15 @@
     return key;
   }
 
-  function recordsFrom(elements) {
+  function recordsFrom(replies) {
     var out = [];
-    for (var i = 0; i < elements.length; i++) {
-      var el = elements[i];
-      var raw = GV.visibleRaw(el);
+    for (var i = 0; i < replies.length; i++) {
+      var reply = replies[i];
+      if (!reply || !reply.speech) continue;
       out.push({
-        key: keyFor(el),
-        raw: raw,
-        speech: raw ? GV.visibleSpeech(el) : ""
+        key: keyFor(reply.element),
+        raw: reply.raw || reply.speech,
+        speech: reply.speech
       });
     }
     return out;
@@ -60,7 +61,16 @@
     return null;
   }
 
+  // Chrome drops speechSynthesis.speak until the page has a click or keypress.
+  // Keep the words and try again on the next gesture. The call has to happen
+  // inside that event, so the listeners below invoke speak directly.
   function speakAloud(text) {
+    if (!text) return;
+    queuedSpeech = text;
+    attemptSpeak(text);
+  }
+
+  function attemptSpeak(text) {
     var synth = getSynth();
     var Utterance = root.SpeechSynthesisUtterance;
     if (!synth || !Utterance || !text) return;
@@ -73,13 +83,29 @@
         utterance.voice = voice;
         if (voice.lang) utterance.lang = voice.lang;
       }
+      utterance.onstart = function () {
+        if (queuedSpeech === text) queuedSpeech = "";
+      };
+      utterance.onend = function () {
+        if (queuedSpeech === text) queuedSpeech = "";
+      };
+      utterance.onerror = function (event) {
+        var reason = event && event.error;
+        if (reason === "not-allowed") queuedSpeech = text;
+      };
       synth.speak(utterance);
     } catch (err) {
-      // A missing voice or a torn-down tab should not break the watcher.
+      queuedSpeech = text;
     }
   }
 
+  function flushQueued() {
+    if (!queuedSpeech) return;
+    attemptSpeak(queuedSpeech);
+  }
+
   function stopSpeaking() {
+    queuedSpeech = "";
     session.stop();
     var synth = getSynth();
     if (synth && synth.cancel) {
@@ -119,36 +145,37 @@
     debugEl = null;
   }
 
-  function updateDebug(elements) {
+  function updateDebug(replies) {
     if (!debug) {
       if (debugEl) clearDebug();
       return;
     }
     ensureDebugStyle();
-    var latest = elements.length ? elements[elements.length - 1] : null;
-    if (!latest) {
+    var latest = replies.length ? replies[replies.length - 1] : null;
+    var target = latest ? (latest.body || latest.element) : null;
+    if (!target) {
       clearDebug();
       return;
     }
-    if (debugEl === latest) return;
+    if (debugEl === target) return;
     clearDebug();
-    debugEl = latest;
-    latest.classList.add(DEBUG_CLASS);
+    debugEl = target;
+    target.classList.add(DEBUG_CLASS);
     try {
-      console.info("[Grok Voice Reader] latest assistant reply:", GV.elementPath(latest));
+      console.info("[Grok Voice Reader] latest assistant reply:", GV.elementPath(target));
     } catch (err) {
       // Logging is only a debugging aid.
     }
   }
 
-  function currentElements() {
-    return GV.detectAssistantElements(document);
+  function currentReplies() {
+    return GV.detectAssistantReplies(document);
   }
 
   function applyEnabled(on) {
     session.setEnabled(on);
     if (on) {
-      session.arm(recordsFrom(currentElements()));
+      session.arm(recordsFrom(currentReplies()));
       markArmed(true);
     } else {
       stopSpeaking();
@@ -158,10 +185,10 @@
   }
 
   function scan() {
-    var elements = currentElements();
-    updateDebug(elements);
+    var replies = currentReplies();
+    updateDebug(replies);
     if (!session.isEnabled()) return;
-    session.watch(recordsFrom(elements));
+    session.watch(recordsFrom(replies));
   }
 
   function scheduleScan() {
@@ -249,6 +276,9 @@
       if (debug) scheduleScan();
     });
   }
+
+  document.addEventListener("pointerdown", flushQueued, true);
+  document.addEventListener("keydown", flushQueued, true);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot, { once: true });

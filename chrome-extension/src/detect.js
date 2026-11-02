@@ -1,15 +1,12 @@
-// Find assistant replies without relying on a data-testid.
-// Primary: Streamdown blocks grouped into one bubble.
-// A purple or right-aligned bubble is the person's, even if it also uses
-// Streamdown. Fallback: colored bubbles in the scrolling message list.
+// Assistant replies are the Streamdown blocks of the last bot message.
+// The name label, timestamp, and buttons sit outside that markdown and are
+// not spoken. A purple or right-aligned bubble is the person's, even when
+// it uses the same renderer.
 (function (root) {
   "use strict";
 
   var GV = root.GrokVoice || (root.GrokVoice = {});
-  var CONTENT_TAG = {
-    P: 1, UL: 1, OL: 1, PRE: 1, TABLE: 1, BLOCKQUOTE: 1,
-    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1
-  };
+  var EXTRA_TAG = { UL: 1, OL: 1, PRE: 1, TABLE: 1, BLOCKQUOTE: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1 };
 
   function mark() {
     return String(GV.STREAMDOWN_MARK || "streamdown").toLowerCase();
@@ -38,8 +35,8 @@
     var match = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/.exec(color || "");
     if (!match) return null;
     var alpha = 1;
-    if (color.indexOf("rgba") === 0) {
-      var parts = color.split(",");
+    if (String(color).indexOf("rgba") === 0) {
+      var parts = String(color).split(",");
       alpha = parseFloat(parts[parts.length - 1]);
       if (!isFinite(alpha)) alpha = 1;
     }
@@ -50,13 +47,6 @@
     var c = parseRgb(color);
     if (!c || c.a === 0) return false;
     return c.b > 120 && c.r > 70 && c.b > c.g + 40 && c.r > c.g + 20;
-  }
-
-  function hasOwnBackground(el) {
-    var style = styleOf(el);
-    if (!style) return false;
-    var c = parseRgb(style.backgroundColor);
-    return Boolean(c && c.a !== 0);
   }
 
   function ignored(el) {
@@ -76,6 +66,14 @@
     return false;
   }
 
+  function isStreamdownParagraph(el) {
+    return el && el.tagName === "P" && el.getAttribute("dir") === "auto" && hasStreamdown(el);
+  }
+
+  function isContentBlock(el) {
+    return isStreamdownParagraph(el) || EXTRA_TAG[el.tagName] === 1;
+  }
+
   function deepElements(node) {
     var out = [];
     function visit(rootNode) {
@@ -88,6 +86,19 @@
     }
     visit(node);
     return out;
+  }
+
+  function containsStreamdownParagraph(el) {
+    if (isStreamdownParagraph(el)) return true;
+    try {
+      var nodes = el.querySelectorAll("p[dir='auto']");
+      for (var i = 0; i < nodes.length; i++) {
+        if (hasStreamdown(nodes[i])) return true;
+      }
+    } catch (err) {
+      return false;
+    }
+    return false;
   }
 
   function isScrollList(el) {
@@ -113,7 +124,10 @@
       if (!isScrollList(el)) continue;
       var count = 0;
       try {
-        count = el.querySelectorAll('[class*="' + mark() + '"]').length;
+        var paras = el.querySelectorAll("p[dir='auto']");
+        for (var j = 0; j < paras.length; j++) {
+          if (hasStreamdown(paras[j])) count += 1;
+        }
       } catch (err) {
         count = 0;
       }
@@ -127,61 +141,69 @@
     return best;
   }
 
-  function containsStreamdown(el) {
-    if (hasStreamdown(el)) return true;
-    try {
-      return Boolean(el.querySelector('[class*="' + mark() + '"]'));
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function isContentBlock(el) {
-    return CONTENT_TAG[el.tagName] === 1;
-  }
-
-  // Two Streamdown paragraphs inside one bubble are one reply.
-  // Two row wrappers that each contain Streamdown are two messages.
-  function separatesMessages(parent) {
-    var kids = [];
+  // Sibling paragraphs are one reply. Sibling message rows are not.
+  function separatesIntoDistinctMessages(parent) {
+    var groups = [];
     var children = parent.children;
-    for (var i = 0; i < children.length; i++) {
-      if (containsStreamdown(children[i])) kids.push(children[i]);
+    var i;
+    for (i = 0; i < children.length; i++) {
+      if (containsStreamdownParagraph(children[i])) groups.push(children[i]);
     }
-    if (kids.length < 2) return false;
-    for (var j = 0; j < kids.length; j++) {
-      if (!isContentBlock(kids[j])) return true;
+    if (groups.length < 2) return false;
+    for (i = 0; i < groups.length; i++) {
+      if (!isContentBlock(groups[i])) return true;
     }
     return false;
   }
 
-  function bubbleFor(block, list) {
+  function plainText(el) {
+    try {
+      return String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+    } catch (err) {
+      return "";
+    }
+  }
+
+  // A name, timestamp, or button next to the markdown means this parent is
+  // the message shell, not the body.
+  function hasForeignLabel(parent) {
+    var children = parent.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (isContentBlock(child) || containsStreamdownParagraph(child)) continue;
+      if (child.tagName === "BUTTON") return true;
+      if (child.querySelector && child.querySelector("button")) return true;
+      if (plainText(child)) return true;
+    }
+    return false;
+  }
+
+  function messageRowOf(block, list) {
     var node = block;
-    var shaded = hasOwnBackground(block) ? block : null;
     var doc = block.ownerDocument;
     var guard = 0;
     while (node.parentElement && guard < 24) {
       guard += 1;
       var parent = node.parentElement;
       if (parent === doc.body || parent === doc.documentElement) break;
-      if ((list && parent === list) || separatesMessages(parent) || isScrollList(parent)) break;
+      if ((list && parent === list) || isScrollList(parent) || separatesIntoDistinctMessages(parent)) break;
       node = parent;
-      if (hasOwnBackground(node)) shaded = node;
     }
-    if (shaded && shaded.contains(block)) return shaded;
     return node;
   }
 
-  function streamdownBlocks(rootNode) {
-    var found = [];
-    var elements = deepElements(rootNode);
-    for (var i = 0; i < elements.length; i++) {
-      var el = elements[i];
-      if (!hasStreamdown(el) || ignored(el)) continue;
-      if (el.parentElement && hasStreamdown(el.parentElement)) continue;
-      found.push(el);
+  function markdownBox(block) {
+    var node = block;
+    var doc = block.ownerDocument;
+    var guard = 0;
+    while (node.parentElement && guard < 24) {
+      guard += 1;
+      var parent = node.parentElement;
+      if (parent === doc.body || parent === doc.documentElement) break;
+      if (hasForeignLabel(parent) || separatesIntoDistinctMessages(parent) || isScrollList(parent)) break;
+      node = parent;
     }
-    return found;
+    return node;
   }
 
   function attrRole(el) {
@@ -232,56 +254,80 @@
     return false;
   }
 
-  function hasInnerBubble(el) {
-    var text = GV.visibleRaw(el);
-    if (!text) return false;
-    var nodes = el.querySelectorAll("*");
-    for (var i = 0; i < nodes.length; i++) {
-      var child = nodes[i];
-      if (ignored(child) || !hasOwnBackground(child)) continue;
-      var inner = GV.visibleRaw(child);
-      if (inner && inner.length >= 8 && inner.length < text.length * 0.9) return true;
+  function includeBlock(el, row) {
+    if (!el || ignored(el)) return false;
+    if (el.tagName === "P") return isStreamdownParagraph(el);
+    if (!EXTRA_TAG[el.tagName]) return false;
+    var box = markdownBox(el);
+    var paras = row.querySelectorAll("p[dir='auto']");
+    for (var i = 0; i < paras.length; i++) {
+      if (!hasStreamdown(paras[i])) continue;
+      if (markdownBox(paras[i]) === box) return true;
     }
     return false;
   }
 
-  function fallbackBubbles(doc, list) {
-    var rootNode = list || doc.body;
-    if (!rootNode) return [];
+  // Spoken words of one assistant message: Streamdown paragraphs plus lists,
+  // headings, and tables in that same markdown box. Name labels are not blocks.
+  GV.replySpeech = function replySpeech(row) {
+    if (!row || !row.querySelectorAll) return "";
+    var nodes = row.querySelectorAll("p, ul, ol, pre, blockquote, h1, h2, h3, h4, h5, h6, table");
+    var blocks = [];
+    var i;
+    for (i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!includeBlock(el, row)) continue;
+      var nested = false;
+      var j;
+      for (j = 0; j < blocks.length; j++) {
+        if (blocks[j].contains(el)) nested = true;
+      }
+      if (nested) continue;
+      blocks = blocks.filter(function (other) { return !el.contains(other); });
+      blocks.push(el);
+    }
+    var parts = [];
+    for (i = 0; i < blocks.length; i++) {
+      var text = GV.visibleSpeech(blocks[i]);
+      if (text) parts.push(text);
+    }
+    return parts.join(" ");
+  };
+
+  function streamdownParagraphs(rootNode) {
+    var found = [];
     var elements = deepElements(rootNode);
-    var hits = [];
-    var bounds = rootNode.getBoundingClientRect();
     for (var i = 0; i < elements.length; i++) {
       var el = elements[i];
-      if (ignored(el) || !hasOwnBackground(el)) continue;
-      if (!GV.visibleRaw(el)) continue;
-      var rect = el.getBoundingClientRect();
-      if (bounds.height && rect.height > bounds.height * 0.92 && rect.width > bounds.width * 0.92) continue;
-      if (hasInnerBubble(el)) continue;
-      if (isUserStyled(el, rootNode)) continue;
-      hits.push(el);
+      if (isStreamdownParagraph(el) && !ignored(el)) found.push(el);
     }
-    return hits;
+    return found;
   }
 
-  // Assistant bubbles in document order. Each entry is one reply.
-  GV.detectAssistantElements = function detectAssistantElements(doc) {
+  // Replies in document order. element is the message row (identity). body is
+  // the markdown box (what Show-what-it-detects outlines). speech is the body.
+  GV.detectAssistantReplies = function detectAssistantReplies(doc) {
     var body = doc.body || doc.documentElement;
     if (!body) return [];
     var list = findMessageList(doc);
-    var blocks = streamdownBlocks(list || body);
-    if (!blocks.length) return fallbackBubbles(doc, list);
+    var paragraphs = streamdownParagraphs(list || body);
     var seen = new Set();
-    var bubbles = [];
-    for (var i = 0; i < blocks.length; i++) {
-      var bubble = bubbleFor(blocks[i], list);
-      if (!bubble || seen.has(bubble) || ignored(bubble)) continue;
-      seen.add(bubble);
-      if (isUserStyled(bubble, list || body)) continue;
-      if (!GV.visibleRaw(bubble)) continue;
-      bubbles.push(bubble);
+    var replies = [];
+    for (var i = 0; i < paragraphs.length; i++) {
+      var row = messageRowOf(paragraphs[i], list);
+      if (!row || seen.has(row)) continue;
+      seen.add(row);
+      if (isUserStyled(row, list || body)) continue;
+      var speech = GV.replySpeech(row);
+      if (!speech) continue;
+      replies.push({
+        element: row,
+        body: markdownBox(paragraphs[i]),
+        speech: speech,
+        raw: speech
+      });
     }
-    return bubbles;
+    return replies;
   };
 
   GV.elementPath = function elementPath(el) {

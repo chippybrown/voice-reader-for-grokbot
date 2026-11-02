@@ -48,11 +48,11 @@ Chrome ignores the path on a host permission and grants the whole site. Prefer a
 
 The watcher listens to the whole document. It does not need a `data-testid`.
 
-Assistant text on grok.com is rendered by Streamdown. A block is a `p`, `ul`, `ol`, `pre`, heading, or table whose class contains `streamdown` (for example `streamdown-first-block:mt-0`). Every block in the same bubble is one reply.
+Assistant text on grok.com is rendered by Streamdown. The reader uses only those blocks: a `p` with `dir="auto"` whose class contains `streamdown` (for example `streamdown-first-block:mt-0`), plus any list, heading, or table in that same markdown box. The bot name above the reply, the time, and the buttons are not part of that box, so they are not spoken. Several blocks in one box are one reply. A new or changed message is spoken after its text stays still for about 1.5 seconds, and only once.
 
 Your own bubbles are left out even when they use Streamdown. A bubble counts as yours when it is purple, right-aligned (`justify-content: flex-end`, or sitting on the right side of the thread), or marked with a user role or label. The input box, menus, and tooltips are ignored.
 
-If a page has no Streamdown markup, the fallback is the scrolling message list: left or dark-gray bubbles are read, right or purple ones are not.
+Chrome sometimes blocks `speechSynthesis` until the page has been clicked or typed in. When that happens the reply is kept and spoken on the next click or keypress in the tab.
 
 `STREAMDOWN_MARK` and `SETTLE_MS` are in `src/config.js`. The quiet gap is 1.5 seconds. Raise it if a slow stream is read in pieces.
 

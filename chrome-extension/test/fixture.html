@@ -18,6 +18,9 @@
     .start { justify-content: flex-start; }
     .end { justify-content: flex-end; }
     .pad { max-width: 75%; border-radius: 16px; padding: 10px 14px; line-height: 1.45; }
+    .card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 75%; }
+    .who { font-weight: 650; }
+    .when { color: #9aa4ad; font-size: 12px; }
     .gray { background: #2b2e36; color: #f3f3f3; }
     .purple { background: #6d28d9; color: #fff; }
     .gone { display: none; }
@@ -37,8 +40,13 @@
       </div>
     </div>
     <div class="turn start">
-      <div class="pad gray" id="old-reply">
-        <p dir="auto" class="break-words last:mb-0 max-md:leading-[155%] max-md:mb-4 max-md:last:mb-0 streamdown-first-block:mt-0" style="white-space: pre-wrap;">This old answer should stay quiet.</p>
+      <div class="card">
+        <div class="who">Moya</div>
+        <div class="when">2:14 PM</div>
+        <div class="pad gray" id="old-reply">
+          <p dir="auto" class="break-words last:mb-0 max-md:leading-[155%] max-md:mb-4 max-md:last:mb-0 streamdown-first-block:mt-0" style="white-space: pre-wrap;">This old answer should stay quiet.</p>
+        </div>
+        <button type="button">Copy</button>
       </div>
     </div>
     <div class="turn start" hidden>
@@ -110,12 +118,24 @@
 
       var row = document.createElement("div");
       row.className = "turn start";
+      var card = document.createElement("div");
+      card.className = "card";
+      var who = document.createElement("div");
+      who.className = "who";
+      who.textContent = "Moya";
+      var when = document.createElement("div");
+      when.className = "when";
+      when.textContent = "2:15 PM";
       var pad = document.createElement("div");
       pad.className = "pad gray";
       pad.id = "stream-body";
       var paragraph = streamParagraph();
       pad.append(paragraph);
-      row.append(pad);
+      var copy = document.createElement("button");
+      copy.type = "button";
+      copy.textContent = "Copy";
+      card.append(who, when, pad, copy);
+      row.append(card);
       document.getElementById("live").append(row);
 
       var plain = "The newest answer is ready. See the docs for more. **not stars** and a bare https://example.com/raw-url to skip. Also [notes](https://example.com/notes-url) please.";
