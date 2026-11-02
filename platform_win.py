@@ -424,10 +424,10 @@ def all_reply_keys():
 
 
 def watch_snapshot(seen, follow_path):
-    """Automatic read. The window title names the bot on screen.
+    """Automatic read. selection.last-agent names the bot on screen.
 
     Titles come from EnumWindows, not UI Automation, so the Tk poll does not
-    deadlock. A missing title keeps the last chat instead of going uncertain.
+    deadlock. A title is only a hint, and the bare "Grok Bot" names nobody.
     """
     folders = chat_folders()
     if not folders:

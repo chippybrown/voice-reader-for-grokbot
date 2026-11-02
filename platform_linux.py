@@ -391,9 +391,9 @@ def all_reply_keys():
 
 
 def watch_snapshot(seen, follow_path):
-    """Automatic read. The window title names the bot on screen.
+    """Automatic read. selection.last-agent names the bot on screen.
 
-    A missing title keeps the last chat instead of going uncertain.
+    The window title is only a hint. On Mint it is the bare "Grok Bot".
     """
     folders = chat_folders()
     if not folders:
