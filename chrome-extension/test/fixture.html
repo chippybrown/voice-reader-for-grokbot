@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grok voice fixture</title>
+  <style>
+    body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+    #thread {
+      overflow-y: auto;
+      height: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px;
+      background: #16181d;
+    }
+    .turn { display: flex; width: 100%; }
+    .start { justify-content: flex-start; }
+    .end { justify-content: flex-end; }
+    .pad { max-width: 75%; border-radius: 16px; padding: 10px 14px; line-height: 1.45; }
+    .card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 75%; }
+    .who { font-weight: 650; }
+    .when { color: #9aa4ad; font-size: 12px; }
+    .gray { background: #2b2e36; color: #f3f3f3; }
+    .purple { background: #6d28d9; color: #fff; }
+    .gone { display: none; }
+    .composer { padding: 12px; background: #101114; }
+    .composer textarea { width: 100%; box-sizing: border-box; }
+    #menu { position: fixed; top: 8px; right: 8px; background: #333; color: #fff; padding: 6px 8px; }
+    #hint { position: fixed; left: 8px; bottom: 64px; background: #444; color: #fff; padding: 4px 6px; font-size: 12px; }
+    #stream { margin: 12px; font: inherit; }
+    p { margin: 0 0 8px; }
+  </style>
+</head>
+<body>
+  <div id="thread">
+    <div class="turn end">
+      <div class="pad purple">
+        <p dir="auto" class="break-words last:mb-0 max-md:leading-[155%] max-md:mb-4 max-md:last:mb-0 streamdown-first-block:mt-0" style="white-space: pre-wrap;">What was already asked?</p>
+      </div>
+    </div>
+    <div class="turn start">
+      <div class="card">
+        <div class="who">Moya</div>
+        <div class="when">2:14 PM</div>
+        <div class="pad gray" id="old-reply">
+          <p dir="auto" class="break-words last:mb-0 max-md:leading-[155%] max-md:mb-4 max-md:last:mb-0 streamdown-first-block:mt-0" style="white-space: pre-wrap;">This old answer should stay quiet.</p>
+        </div>
+        <button type="button">Copy</button>
+      </div>
+    </div>
+    <div class="turn start" hidden>
+      <div class="pad gray">
+        <p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space: pre-wrap;">Hidden secret reply should not be spoken.</p>
+      </div>
+    </div>
+    <div class="turn start gone">
+      <div class="pad gray">
+        <p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space: pre-wrap;">CSSHIDDEN reply should not be spoken.</p>
+      </div>
+    </div>
+    <div class="turn start" aria-hidden="true">
+      <div class="pad gray">
+        <p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space: pre-wrap;">Aria hidden reply should not be spoken.</p>
+      </div>
+    </div>
+    <div id="live"></div>
+  </div>
+  <form class="composer">
+    <textarea placeholder="Message"></textarea>
+  </form>
+  <div id="menu" role="menu">File menu should stay quiet</div>
+  <div id="hint" role="tooltip">Tooltip hint should stay quiet</div>
+  <button id="stream" type="button">Stream a new reply</button>
+  <script>
+    var BLOCK_CLASS = "break-words last:mb-0 max-md:leading-[155%] max-md:mb-4 max-md:last:mb-0 streamdown-first-block:mt-0";
+
+    function streamParagraph() {
+      var paragraph = document.createElement("p");
+      paragraph.dir = "auto";
+      paragraph.className = BLOCK_CLASS;
+      paragraph.style.whiteSpace = "pre-wrap";
+      return paragraph;
+    }
+
+    function renderFinal(pad) {
+      pad.replaceChildren();
+      var first = streamParagraph();
+      first.append("The newest answer is ready. See the ");
+      var link = document.createElement("a");
+      link.href = "https://example.com/secret-path";
+      var strong = document.createElement("strong");
+      strong.className = "font-semibold";
+      strong.textContent = "docs";
+      link.append(strong);
+      first.append(link);
+      first.append(" for more.");
+      var second = streamParagraph();
+      second.append("**not stars** and a bare https://example.com/raw-url to skip. Also [notes](https://example.com/notes-url) please.");
+      pad.append(first, second);
+    }
+
+    function streamNewReply() {
+      var old = document.querySelector("#old-reply p");
+      if (old && old.textContent.indexOf("Still old") === -1) {
+        old.append(document.createTextNode(" Still old."));
+      }
+
+      var userRow = document.createElement("div");
+      userRow.className = "turn end";
+      var userPad = document.createElement("div");
+      userPad.className = "pad purple";
+      var userText = streamParagraph();
+      userText.textContent = "Do not read this question.";
+      userPad.append(userText);
+      userRow.append(userPad);
+      document.getElementById("live").before(userRow);
+
+      var row = document.createElement("div");
+      row.className = "turn start";
+      var card = document.createElement("div");
+      card.className = "card";
+      var who = document.createElement("div");
+      who.className = "who";
+      who.textContent = "Moya";
+      var when = document.createElement("div");
+      when.className = "when";
+      when.textContent = "2:15 PM";
+      var pad = document.createElement("div");
+      pad.className = "pad gray";
+      pad.id = "stream-body";
+      var paragraph = streamParagraph();
+      pad.append(paragraph);
+      var copy = document.createElement("button");
+      copy.type = "button";
+      copy.textContent = "Copy";
+      card.append(who, when, pad, copy);
+      row.append(card);
+      document.getElementById("live").append(row);
+
+      var plain = "The newest answer is ready. See the docs for more. **not stars** and a bare https://example.com/raw-url to skip. Also [notes](https://example.com/notes-url) please.";
+      var step = 18;
+      var cursor = 0;
+      return new Promise(function (resolve) {
+        function tick() {
+          cursor = Math.min(plain.length, cursor + step);
+          paragraph.textContent = plain.slice(0, cursor);
+          if (cursor < plain.length) {
+            setTimeout(tick, 70);
+            return;
+          }
+          renderFinal(pad);
+          resolve();
+        }
+        setTimeout(tick, 70);
+      });
+    }
+
+    document.getElementById("stream").addEventListener("click", function () {
+      streamNewReply();
+    });
+    window.streamNewReply = streamNewReply;
+  </script>
+</body>
+</html>

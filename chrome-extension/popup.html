@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grok Voice Reader</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Grok Voice Reader <span id="version"></span></h1>
+    <p id="status">Checking this tab…</p>
+  </header>
+  <label class="switch">
+    <input id="enabled" type="checkbox">
+    <span>Read new replies aloud</span>
+  </label>
+  <label class="switch">
+    <input id="debug" type="checkbox">
+    <span>Show what it detects</span>
+  </label>
+  <label class="field">
+    Voice
+    <select id="voice"></select>
+  </label>
+  <label class="field">
+    Rate <span id="rate-value">1.0</span>
+    <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
+  </label>
+  <div class="buttons">
+    <button id="stop" type="button">Stop</button>
+    <button id="replay" type="button">Replay last</button>
+  </div>
+  <script src="src/config.js"></script>
+  <script src="src/text.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

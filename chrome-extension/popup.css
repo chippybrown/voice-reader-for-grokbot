@@ -1,0 +1,106 @@
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 14px 14px 16px;
+  color: #1c2421;
+  background: #f7f6f3;
+}
+
+h1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+#version {
+  font-size: 12px;
+  font-weight: 500;
+  color: #5c6b63;
+}
+
+#status {
+  min-height: 4.8em;
+  margin: 6px 0 12px;
+  color: #3d4a44;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+label {
+  display: block;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.field {
+  margin-bottom: 12px;
+}
+
+select,
+button {
+  font: inherit;
+}
+
+select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+input[type="range"] {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #8a948e;
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid #146c43;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #e7eee9;
+    background: #1b211e;
+  }
+
+  #status {
+    color: #c5d0c9;
+  }
+
+  button {
+    background: #2a332e;
+    border-color: #5c6b63;
+    color: inherit;
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Grok Voice Reader",
+  "version": "0.1.4",
+  "description": "Reads a new Grok reply aloud in the tab that is open.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://grok.com/*",
+    "https://*.grok.com/*",
+    "https://x.ai/*",
+    "https://*.x.ai/*",
+    "https://grok.x.ai/*",
+    "https://*.grok.x.ai/*",
+    "https://cursor.com/*",
+    "https://*.cursor.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "Grok Voice Reader",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://grok.com/*",
+        "https://*.grok.com/*",
+        "https://x.ai/*",
+        "https://*.x.ai/*",
+        "https://grok.x.ai/*",
+        "https://*.grok.x.ai/*",
+        "https://cursor.com/*",
+        "https://*.cursor.com/*"
+      ],
+      "js": [
+        "src/config.js",
+        "src/text.js",
+        "src/detect.js",
+        "src/reader.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}
