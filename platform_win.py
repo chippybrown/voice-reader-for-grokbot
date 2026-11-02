@@ -333,30 +333,43 @@ def _window_name(control):
 
 
 def grok_window_titles():
-    """Titles of Grok Bot windows, including 'Payroll — Grok Bot'.
+    """Titles of Grok Bot windows, including 'Moya — Grok Bot'.
 
-    Searching for the exact name 'Grok Bot' misses the window once a bot
-    name is in the title, which left the reader on the previous chat.
+    EnumWindows does not use UI Automation, so it is safe on the Tk poll.
+    A bare 'Grok Bot' title names no bot.
     """
     try:
-        import uiautomation as auto
-        names = []
-        root = auto.GetRootControl()
-        for child in root.GetChildren():
-            name = _window_name(child)
-            if name:
-                names.append(name)
-        titles = grok_store.grok_titles_from_names(names)
-        if titles:
-            return titles
-        win = auto.WindowControl(searchDepth=1, Name="Grok Bot")
-        if win.Exists(0, 0):
-            title = _window_name(win).strip()
-            if title:
-                return [title]
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
+        user32.EnumWindows.restype = wintypes.BOOL
+        found = []
+
+        def collect(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            text = (buf.value or "").strip()
+            if text:
+                found.append(text)
+            return True
+
+        user32.EnumWindows(enum_proc(collect), 0)
+        return grok_store.grok_titles_from_names(found)
     except Exception:
-        pass
-    return []
+        return []
 
 
 def _grok_window():
@@ -411,18 +424,17 @@ def all_reply_keys():
 
 
 def watch_snapshot(seen, follow_path):
-    """Automatic read. Keeps a new reply when the open chat is not proven.
+    """Automatic read. The window title names the bot on screen.
 
-    Window titles are not consulted. Asking UI Automation for them from
-    inside the Tk poll deadlocks the window loop on Windows, so the poll
-    never finishes and nothing after the startup log line is written.
+    Titles come from EnumWindows, not UI Automation, so the Tk poll does not
+    deadlock. A missing title keeps the last chat instead of going uncertain.
     """
     folders = chat_folders()
     if not folders:
         lines, names, keys, active = read_snapshot()
         return lines, names, keys, active, []
     return grok_store.watch_snapshot(
-        None, window_titles=[], directories=folders, seen=seen, follow_path=follow_path)
+        None, window_titles=_window_titles(), directories=folders, seen=seen, follow_path=follow_path)
 
 
 def install_hotkeys(flags):

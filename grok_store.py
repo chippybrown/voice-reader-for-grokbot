@@ -972,20 +972,17 @@ def _focused_opens(rows):
     return []
 
 
-def active_transcript(directory, window_titles=None, directories=None):
-    """The conversation on screen now, from the saved files only.
+def active_transcript(directory, window_titles=None, directories=None, follow_path=None):
+    """The conversation visible in the Grok Bot window.
 
-    The window title is ignored on every platform. A bare "Grok Bot" title
-    names no bot, and a title that does is still not the source of truth.
-    The open chat is the transcript that was rewritten when it was shown,
-    if exactly one was. Otherwise it is the saved selection, then a roster
-    row marked selected, then the only transcript in the account. Several
-    chats and no fresh signal means we are not sure: return None so Back
-    stays quiet instead of playing a different bot.
+    A title that names one bot is that bot. Otherwise the saved selection
+    (selected agent, or a roster row marked selected) is the bot on screen.
+    A file that merely changed is not a switch. When neither signal is
+    present, keep follow_path instead of reporting the chat as uncertain.
     """
-    del window_titles  # titles are not a signal; callers may still pass them
-    slices, rows, _names = _load_stores(_store_list(directory, directories))
+    slices, rows, names = _load_stores(_store_list(directory, directories))
     if not rows:
+        _remember_open(names, None, "uncertain")
         return None
     accounts = _known_accounts(slices, rows)
     known = {row["agent_id"] for row in rows}
@@ -1017,26 +1014,19 @@ def active_transcript(directory, window_titles=None, directories=None):
             selection_mtime = None
             selection_id = None
     _open_choice["selection"] = selection_id if strong else None
-    names = _names
 
     def choose(row, how):
         _remember_open(names, row, how)
         return row
 
-    opened = _focused_opens(scoped)
-    if len(opened) == 1 and (selection_mtime is None or opened[0]["stamp"] > selection_mtime + 0.5):
-        chosen = opened[0]
-        live = _live_row(scoped)
-        # A sync rewrites an idle chat and makes it look opened. If a different
-        # chat's file is newer, that is the conversation on this screen.
-        # A strong selection that names this opened chat still wins: a background
-        # bot's reply must not take the window.
-        if (live and live["path"] != chosen["path"]
-                and (live.get("stamp") or 0) > (chosen.get("stamp") or 0)
-                and _open_choice.get("selection") != chosen["agent_id"]):
-            return choose(live, "most recently active")
-        return choose(chosen, "opened file")
-    if selection_id:
+    titled = agent_id_from_titles(window_titles, names)
+    if titled:
+        chosen = _row_for(scoped, account, titled)
+        if chosen is not None:
+            return choose(chosen, "window")
+    # The saved selection is the bot this window is showing. A newer file,
+    # including another bot's reply or a sync, does not take its place.
+    if strong and selection_id:
         chosen = _row_for(scoped, account, selection_id)
         if chosen is not None:
             return choose(chosen, "selection")
@@ -1045,6 +1035,16 @@ def active_transcript(directory, window_titles=None, directories=None):
     if chosen is not None:
         _open_choice["selection"] = selected
         return choose(chosen, "selection")
+    opened = _focused_opens(scoped)
+    if len(opened) == 1 and not strong:
+        live = _live_row(scoped)
+        # An idle file that was only touched is not the chat that just received a reply.
+        if live is None or live["path"] == opened[0]["path"] or (live.get("stamp") or 0) <= (opened[0].get("stamp") or 0):
+            return choose(opened[0], "opened file")
+    if follow_path:
+        for row in scoped:
+            if row["path"] == follow_path:
+                return choose(row, "kept")
     if len(scoped) == 1:
         return choose(scoped[0], "only chat")
     return choose(None, "uncertain")
@@ -1101,8 +1101,9 @@ def reply_snapshot(directory, window_titles=None, directories=None):
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
-    window_titles are ignored. Every call re-reads the stores. None for the
-    active file means the open chat is not known, so Back stays quiet.
+    A window title that names one bot selects that bot. Every call re-reads
+    the stores. None for the active file means the open chat is not known
+    and there is no previous chat to keep, so Back stays quiet.
     The watcher uses watch_snapshot, which can still speak one new reply.
     """
     folders = _store_list(directory, directories)
@@ -1217,7 +1218,8 @@ def watch_snapshot(directory, window_titles=None, directories=None, seen=None, f
     seen = seen if seen is not None else set()
     folders = _store_list(directory, directories)
     _slices, rows, names = _load_stores(folders)
-    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
+    transcript = active_transcript(
+        directory, window_titles=window_titles, directories=directories, follow_path=follow_path)
 
     def pack(row):
         lines, keylists, bot = _speech_lines(row, names)

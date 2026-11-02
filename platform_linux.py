@@ -391,16 +391,16 @@ def all_reply_keys():
 
 
 def watch_snapshot(seen, follow_path):
-    """Automatic read. Keeps a new reply when the open chat is not proven.
+    """Automatic read. The window title names the bot on screen.
 
-    Window titles are ignored, so the poll does not ask the window manager.
+    A missing title keeps the last chat instead of going uncertain.
     """
     folders = chat_folders()
     if not folders:
         lines, names, keys, active = read_snapshot()
         return lines, names, keys, active, []
     return grok_store.watch_snapshot(
-        None, window_titles=[], directories=folders, seen=seen, follow_path=follow_path)
+        None, window_titles=_window_titles(), directories=folders, seen=seen, follow_path=follow_path)
 
 
 def install_hotkeys(flags):
