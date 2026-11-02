@@ -104,6 +104,8 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
     assert.ok(matches.some((pattern) => pattern.includes("grok.com")));
 
     const page = await browser.newPage();
+    const logs = [];
+    page.on("console", (msg) => logs.push(msg.text()));
     await page.setRequestInterception(true);
     page.on("request", (request) => {
       if (request.url().startsWith("https://grok.com/")) {
@@ -133,15 +135,22 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
 
     const spoken = await waitForSpoken(world);
     assert.deepEqual(spoken, [expected]);
-    for (const banned of ["stay quiet", "Still old", "Hidden secret", "CSSHIDDEN", "Aria hidden", "Do not read", "example.com", "secret-path", "*", "`"]) {
+    for (const banned of ["stay quiet", "Still old", "Hidden secret", "CSSHIDDEN", "Aria hidden", "Do not read", "What was already asked", "File menu", "Tooltip hint", "example.com", "secret-path", "*", "`"]) {
       assert.equal(spoken[0].includes(banned), false, banned);
     }
 
     await page.evaluate(() => {
-      document.querySelector("[data-message-id='new-1']").classList.add("touched");
+      document.getElementById("stream-body").classList.add("touched");
     });
     await delay(1800);
     assert.deepEqual(await spokenTexts(world), [expected]);
+
+    await world.evaluate("new Promise((resolve) => chrome.storage.local.set({ debug: true }, resolve))");
+    await page.waitForSelector(".grok-voice-debug-target", { timeout: 3000 });
+    const outlined = await page.$eval(".grok-voice-debug-target", (el) => el.innerText);
+    assert.equal(outlined.includes("The newest answer is ready"), true);
+    assert.equal(outlined.includes("Do not read"), false);
+    assert.equal(logs.some((line) => line.includes("[Grok Voice Reader] latest assistant reply:")), true);
   } finally {
     await browser.close().catch(() => {});
   }

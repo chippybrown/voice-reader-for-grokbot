@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Grok Voice Reader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reads a new Grok reply aloud in the tab that is open.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
+    "https://grok.com/bot/*",
     "https://grok.com/*",
     "https://*.grok.com/*",
     "https://grok.x.ai/*",
@@ -31,6 +32,7 @@
   "content_scripts": [
     {
       "matches": [
+        "https://grok.com/bot/*",
         "https://grok.com/*",
         "https://*.grok.com/*",
         "https://grok.x.ai/*",
@@ -39,6 +41,7 @@
       "js": [
         "src/config.js",
         "src/text.js",
+        "src/detect.js",
         "src/reader.js",
         "src/content.js"
       ],

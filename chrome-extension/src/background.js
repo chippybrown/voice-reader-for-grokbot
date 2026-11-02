@@ -50,10 +50,15 @@ chrome.storage.onChanged.addListener(function (changes, area) {
   if (area === "local" && changes.enabled) refreshAll();
 });
 
-chrome.runtime.onMessage.addListener(function (message, sender) {
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message || message.type !== "watch-state" || !sender.tab) return;
-  if (message.enabled) showOn(sender.tab.id);
-  else chrome.action.setBadgeText({ tabId: sender.tab.id, text: "" });
+  try {
+    if (message.enabled) showOn(sender.tab.id);
+    else chrome.action.setBadgeText({ tabId: sender.tab.id, text: "" });
+    sendResponse({ ok: true });
+  } catch (err) {
+    try { sendResponse({ ok: false }); } catch (inner) { /* port already closed */ }
+  }
 });
 
 refreshAll();

@@ -15,9 +15,11 @@ Speech uses the browser's built-in `speechSynthesis`. The computer needs a voice
 3. Click **Load unpacked**.
 4. Choose this `chrome-extension` folder (the folder that contains `manifest.json`).
 
-The toolbar icon shows **ON** when the switch is on and the active tab is a Grok page. Open the icon for the switch, voice, rate, **Stop**, and **Replay last**. Those choices are kept in `chrome.storage`.
+The toolbar icon shows **ON** when the switch is on and the active tab is a Grok page, including `https://grok.com/bot/<id>`. Open the icon for the switch, **Show what it detects**, voice, rate, **Stop**, and **Replay last**. Those choices are kept in `chrome.storage`.
 
-After you reload the extension, reload the Grok tab too. Chrome does not reinject a content script into a tab that is already open.
+**Show what it detects** outlines the latest assistant bubble in green and prints its element path in the page console, prefixed with `[Grok Voice Reader]`. Turn it off to clear the outline.
+
+After you reload the extension, reload the Grok tab too. Chrome does not reinject a content script into a tab that is already open. The badge can show **ON** from the address alone before that reload. If the popup says to reload the tab, do that. A missing content script is ignored instead of logging a connection error.
 
 ## Install in Edge
 
@@ -32,39 +34,39 @@ Edge uses the same Manifest V3 package. The **ON** badge, popup, and voices work
 
 The list is `GrokVoice.MATCHES` in `src/config.js`:
 
+- `https://grok.com/bot/*` for a Grok Bot web chat (`grok.com/bot/<id>`)
 - `https://grok.com/*` and `https://*.grok.com/*`
 - `https://grok.x.ai/*` and `https://*.grok.x.ai/*` (older Grok web host)
 
-`grok.com/*` already includes every path on that site. A Grok Bot chat page on `grok.com` is covered. There is no separate public host for Grok Bot web chat yet (the desktop and phone apps are the main way in; X Chat on x.com can show the same bots). To add a host, put the match pattern in `src/config.js` and copy that same array into `manifest.json` under `host_permissions` and `content_scripts[0].matches`. Then reload the extension.
+To add a host, put the match pattern in `src/config.js` and copy that same array into `manifest.json` under `host_permissions` and `content_scripts[0].matches`. Then reload the extension.
 
 Chrome ignores the path on a host permission and grants the whole site. Prefer a Grok host. Do not add `https://x.com/*` unless you mean for the extension to read all of X.
 
 `npm test` checks that the three copies of the list match, and that the only API permissions are `storage` and `activeTab`.
 
-## If it reads the wrong part of the page
+## How a reply is chosen
 
-The live page was not available while this was written, so the selectors are defaults plus a fallback. They live in `GrokVoice.SELECTORS` in `src/config.js`. That file has the edit steps. Short version:
+The watcher listens to the whole document. It does not need a `data-testid`.
 
-1. Open a Grok chat. Right-click a bot reply and choose **Inspect**.
-2. Find an attribute that is on bot replies and not on your messages. `data-testid="assistant-message"` is the usual one on grok.com.
-3. Put that CSS selector first in `selectors.assistant`. The first selector that finds anything is the one used for the whole page.
-4. If the voice says button labels or "thinking" text, add a selector for that extra piece to `selectors.skip`, or point `selectors.content` at the inner node that holds only the reply (often `.response-content-markdown`).
-5. Reload the extension, then reload the tab.
+Assistant text on grok.com is rendered by Streamdown. A block is a `p`, `ul`, `ol`, `pre`, heading, or table whose class contains `streamdown` (for example `streamdown-first-block:mt-0`). Every block in the same bubble is one reply.
 
-If none of the assistant selectors match, the script guesses: it looks for assistant-like class names, then for article-shaped blocks that are not your message and not the composer. Treat that as a hint that the selector list needs an update. It can pick the wrong block.
+Your own bubbles are left out even when they use Streamdown. A bubble counts as yours when it is purple, right-aligned (`justify-content: flex-end`, or sitting on the right side of the thread), or marked with a user role or label. The input box, menus, and tooltips are ignored.
 
-`SETTLE_MS` in the same file is the quiet gap (1500). Raise it if a slow stream is being read in pieces.
+If a page has no Streamdown markup, the fallback is the scrolling message list: left or dark-gray bubbles are read, right or purple ones are not.
+
+`STREAMDOWN_MARK` and `SETTLE_MS` are in `src/config.js`. The quiet gap is 1.5 seconds. Raise it if a slow stream is read in pieces.
 
 ## What the buttons do
 
 - **Read new replies aloud** turns watching on or off. Turning it on does not read what is already on the page.
+- **Show what it detects** outlines the latest assistant bubble and logs its path. It does not change what is spoken.
 - **Voice** and **Rate** are stored for next time. Rate runs from 0.5 to 2.
 - **Stop** stops the current speech and drops a reply that was waiting out the quiet gap.
 - **Replay last** speaks the last reply again, on purpose.
 
 ## Test page
 
-`test/fixture.html` is a static chat. It has an old reply, hidden replies, and a button that streams one new bot reply (with a link and some markdown). The extension does not run on a `file://` page. The automated test loads the extension and serves this file at `https://grok.com/voice-reader-fixture`.
+`test/fixture.html` is a static chat in the grok.com/bot shape: Streamdown paragraphs, left gray assistant bubbles, and right purple user bubbles that also use Streamdown. It has an old reply, hidden replies, a menu, a tooltip, and a button that streams one new bot reply (two paragraphs, a link, and some markdown). The extension does not run on a `file://` page. The automated test loads the extension and serves this file at `https://grok.com/voice-reader-fixture`.
 
 From this folder, with Chrome or Chromium installed (`CHROME_PATH` if it is not `/usr/bin/google-chrome`):
 
