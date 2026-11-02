@@ -928,6 +928,21 @@ except Exception:
 state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
          "file_key": _active, "prev_cur": list(_lines), "explained": set()}
 
+def _heartbeat():
+    """Every minute, so a stall is a missing line rather than a quiet success."""
+    raw = os.environ.get("GROKBOT_VOICE_HEARTBEAT", "").strip()
+    try:
+        interval = max(1.0, float(raw)) if raw else 60.0
+    except ValueError:
+        interval = 60.0
+    now = time.time()
+    if now - state.get("heartbeat", 0) < interval:
+        return
+    state["heartbeat"] = now
+    files, newest = grok_store.last_scan()
+    log(grok_store.watch_heartbeat(files, newest))
+
+
 def _report_callback(exc, val, tb):
     """Tk's default report writes to stderr. That is None in a windowed build."""
     log("watcher problem:\n" + "".join(traceback.format_exception(exc, val, tb)))
@@ -1037,10 +1052,8 @@ def _tick():
         say(announce(manual), bot=bot_of(manual), replay=True)
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
+        _heartbeat()
         try:
-            if not state.get("announced"):
-                state["announced"] = True
-                log("watching")
             cur, names, keys, active, skipped = platform.watch_snapshot(state["seen"], state.get("file_key"))
             for problem in list(grok_store._read_problems.values()):
                 if problem not in state["explained"]:
@@ -1204,7 +1217,17 @@ def quiet_update_check():
             update_note["text"] = "Update available"
     root.after(0, show)
 
-if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
+if os.environ.get("GROKBOT_VOICE_WATCHTEST") == "1":
+    root.report_callback_exception = _report_callback
+    raw_seconds = os.environ.get("GROKBOT_VOICE_WATCH_SECONDS", "").strip()
+    try:
+        watch_seconds = max(5, int(raw_seconds)) if raw_seconds else 25
+    except ValueError:
+        watch_seconds = 25
+    root.after(watch_seconds * 1000, root.destroy)
+    root.after(200, tick)
+    root.mainloop()
+elif os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.report_callback_exception = _report_callback
     root.update_idletasks()
     root.update()

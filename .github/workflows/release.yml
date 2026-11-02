@@ -64,6 +64,10 @@ jobs:
             if (Test-Path $watchLog) { Get-Content $watchLog }
             throw "frozen self-test did not start the watcher"
           }
+          $watch = Join-Path $savedTemp "grokbot-voice-watch"
+          if (Test-Path $watch) { Remove-Item -Recurse -Force $watch }
+          python packaging/windows/churn_watch.py --exe "dist\Grokbot Voice\Grokbot Voice.exe" --seconds 600 --workdir $watch
+          if ($LASTEXITCODE -ne 0) { throw "frozen 10 minute blob churn failed" }
           pyinstaller --noconfirm --onefile --noconsole --name "Grokbot.Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "dist/version.txt;." --exclude-module vosk --exclude-module piper --exclude-module onnxruntime --exclude-module uiautomation --exclude-module numpy --distpath dist/launcher windows_launcher.py
           Copy-Item "dist/launcher/Grokbot.Voice.exe" "dist/Grokbot.Voice.exe" -Force
           # The real program is inside app\. The starter exe at the top is what
