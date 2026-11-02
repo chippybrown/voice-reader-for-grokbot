@@ -66,7 +66,7 @@ choices = platform.voice_choices()   # (label, kind, ref)
 
 def chief_name():
     try:
-        return open(platform.chief_path(), encoding="utf-8").read().strip() or "Moya"
+        return open(grok_store.extended_path(platform.chief_path()), encoding="utf-8").read().strip() or "Moya"
     except Exception:
         return "Moya"
 
@@ -90,7 +90,7 @@ def grok_audio(text, voice_id, speed):
 speak_state = {"kind": "sapi", "ref": 0, "token": 0, "busy_until": 0.0, "making": False}
 
 try:
-    tune_all = json.load(open(TUNE_FILE, encoding="utf-8"))
+    tune_all = json.load(open(grok_store.extended_path(TUNE_FILE), encoding="utf-8"))
 except Exception:
     tune_all = {}
 
@@ -111,8 +111,8 @@ def tune():   # voice in use, or this bot's own speed and pitch when set
     }
 
 def save_tune():
-    os.makedirs(os.path.dirname(TUNE_FILE), exist_ok=True)
-    json.dump(tune_all, open(TUNE_FILE, "w", encoding="utf-8"), indent=1)
+    os.makedirs(grok_store.extended_path(os.path.dirname(TUNE_FILE)), exist_ok=True)
+    json.dump(tune_all, open(grok_store.extended_path(TUNE_FILE), "w", encoding="utf-8"), indent=1)
 
 def use_choice(i):
     label, kind, ref = choices[i]
@@ -122,7 +122,7 @@ def use_choice(i):
 
 saved_label = ""
 try:
-    saved_label = open(SAVED, encoding="utf-8").read().strip()
+    saved_label = open(grok_store.extended_path(SAVED), encoding="utf-8").read().strip()
 except Exception:
     pass
 saved = piper_setup.preferred_index([ch[0] for ch in choices], saved_label)
@@ -132,19 +132,19 @@ BOT_FILE = os.path.join(platform.config_dir(), "bot settings.json")
 
 def load_bot_prefs():
     try:
-        return bot_prefs.normalize(json.load(open(BOT_FILE, encoding="utf-8")))
+        return bot_prefs.normalize(json.load(open(grok_store.extended_path(BOT_FILE), encoding="utf-8")))
     except Exception:
         return bot_prefs.fresh()
 
 bot_state = load_bot_prefs()
 
 def save_bot_prefs():
-    os.makedirs(os.path.dirname(BOT_FILE), exist_ok=True)
-    json.dump(bot_state, open(BOT_FILE, "w", encoding="utf-8"), indent=1)
+    os.makedirs(grok_store.extended_path(os.path.dirname(BOT_FILE)), exist_ok=True)
+    json.dump(bot_state, open(grok_store.extended_path(BOT_FILE), "w", encoding="utf-8"), indent=1)
 
 def saved_voice_label():
     try:
-        return open(SAVED, encoding="utf-8").read().strip()
+        return open(grok_store.extended_path(SAVED), encoding="utf-8").read().strip()
     except Exception:
         return choices[saved][0] if choices else ""
 
@@ -169,8 +169,8 @@ def apply_bot_voice(bot):
 def log(msg):
     try:
         path = platform.log_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        os.makedirs(grok_store.extended_path(os.path.dirname(path)), exist_ok=True)
+        with open(grok_store.extended_path(path), "a", encoding="utf-8") as handle:
             handle.write(time.strftime("%H:%M:%S ") + msg + "\n")
     except Exception:
         pass
@@ -405,7 +405,7 @@ def window_file():
 
 def saved_window():
     try:
-        data = json.load(open(window_file(), encoding="utf-8"))
+        data = json.load(open(grok_store.extended_path(window_file()), encoding="utf-8"))
         layout = window_layout.normalize_layout(data.get("layout"))
         w, h = window_layout.clamp_size(data["w"], data["h"], layout)
         x, y = window_layout.clamp_origin(data["x"], data["y"], w, h, sw, sh, layout)
@@ -487,10 +487,10 @@ def edge_at(x, y):
     return ""
 def save_window():
     try:
-        os.makedirs(platform.config_dir(), exist_ok=True)
+        os.makedirs(grok_store.extended_path(platform.config_dir()), exist_ok=True)
         json.dump({"w": root.winfo_width(), "h": root.winfo_height(), "x": root.winfo_x(), "y": root.winfo_y(),
                    "layout": window_state["layout"]},
-                  open(window_file(), "w", encoding="utf-8"))
+                  open(grok_store.extended_path(window_file()), "w", encoding="utf-8"))
     except Exception:
         pass
 def apply_box(x, y, width, height):
@@ -831,8 +831,8 @@ short = [ch[0] for ch in choices]
 def set_voice(i):
     use_choice(i)
     path = platform.saved_voice_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    open(path, "w", encoding="utf-8").write(short[i])
+    os.makedirs(grok_store.extended_path(os.path.dirname(path)), exist_ok=True)
+    open(grok_store.extended_path(path), "w", encoding="utf-8").write(short[i])
     if tuner["win"] is not None:   # refresh the settings panel for the new voice
         tuner["win"].destroy()
         tuner["win"] = None
@@ -1083,7 +1083,7 @@ def _tick():
                 # is not read aloud. The same file, or the first file we can
                 # lock onto, speaks replies that arrived after launch.
                 previous = state.get("file_key")
-                if previous and not os.path.exists(previous):
+                if previous and not os.path.exists(grok_store.extended_path(previous)):
                     previous = None
                     state["history"] = []
                     state["file_key"] = None
@@ -1152,7 +1152,7 @@ def _tick():
                         state["history"].append(reply)
                         state["pos"] = None
                         state["queue"].append(reply)
-            elif state.get("file_key") and not os.path.exists(state["file_key"]):
+            elif state.get("file_key") and not os.path.exists(grok_store.extended_path(state["file_key"])):
                 state["file_key"] = None
         except Exception as exc:
             message = repr(exc)

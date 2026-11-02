@@ -7,6 +7,7 @@ import subprocess
 import urllib.request
 import zipfile
 
+import grok_store
 import windows_launcher
 
 REPO = "chippybrown/voice-reader-for-grokbot"
@@ -131,7 +132,7 @@ def check(current, urlopen, timeout=20):
 
 def read_state(path):
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(grok_store.extended_path(path), encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError, TypeError):
         data = {}
@@ -151,13 +152,13 @@ def read_state(path):
 def write_state(path, when, result):
     folder = os.path.dirname(path)
     if folder:
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(grok_store.extended_path(folder), exist_ok=True)
     payload = {
         "checked": float(when),
         "latest": str((result or {}).get("latest") or ""),
         "available": bool((result or {}).get("available")),
     }
-    with open(path, "w", encoding="utf-8") as handle:
+    with open(grok_store.extended_path(path), "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
 
 

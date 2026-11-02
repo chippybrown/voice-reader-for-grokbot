@@ -54,15 +54,17 @@ def key_help():
 
 def load_key():
     try:
-        return _dpapi(open(os.path.join(config_dir(), "xai key.bin"), "rb").read(), False).decode()
+        with open(grok_store.extended_path(os.path.join(config_dir(), "xai key.bin")), "rb") as handle:
+            return _dpapi(handle.read(), False).decode()
     except Exception:
         return ""
 
 
 def save_key(key):
-    os.makedirs(config_dir(), exist_ok=True)
+    os.makedirs(grok_store.extended_path(config_dir()), exist_ok=True)
     path = os.path.join(config_dir(), "xai key.bin")
-    open(path, "wb").write(_dpapi(key.strip().encode(), True))
+    with open(grok_store.extended_path(path), "wb") as handle:
+        handle.write(_dpapi(key.strip().encode(), True))
 
 
 def _dpapi(data, protect):
@@ -203,7 +205,7 @@ class WinAudio:
         winsound.PlaySound(None, 0)
 
     def arm(self, path):
-        with wave.open(path, "rb") as handle:
+        with wave.open(grok_store.extended_path(path), "rb") as handle:
             self.params = handle.getparams()
             self.frames = handle.readframes(handle.getnframes())
         self.offset = 0.0
@@ -240,7 +242,7 @@ class WinAudio:
         rest = self.frames[start:]
         if not rest:
             return
-        with wave.open(self.tail, "wb") as handle:
+        with wave.open(grok_store.extended_path(self.tail), "wb") as handle:
             handle.setparams(self.params)
             handle.writeframes(rest)
         seconds = len(rest) / float(width * self.params.framerate)
@@ -262,7 +264,7 @@ def find_piper():
     env = os.environ.get("GROKBOT_PIPER", "").strip()
     local = os.path.join(piper_dir(), "piper.exe")
     for path in (env, local):
-        if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+        if path and os.path.isfile(grok_store.extended_path(path)) and os.path.getsize(grok_store.extended_path(path)) > 0:
             return path
     return None
 
@@ -275,7 +277,8 @@ def synthesize(kind, ref, text, speed, pitch, dest):
         ratio = pitch_ratio(pitch)
         length = ratio / max(0.3, float(speed))
         subprocess.run(
-            [binary, "--model", ref, "--output_file", dest, "--length_scale", "%.4f" % length],
+            [binary, "--model", grok_store.extended_path(ref),
+             "--output_file", grok_store.extended_path(dest), "--length_scale", "%.4f" % length],
             input=text.encode("utf-8"),
             check=True,
         )
@@ -283,11 +286,11 @@ def synthesize(kind, ref, text, speed, pitch, dest):
         return
     if ref not in _piper_cache:
         from piper import PiperVoice
-        _piper_cache[ref] = PiperVoice.load(ref)
+        _piper_cache[ref] = PiperVoice.load(grok_store.extended_path(ref))
     from piper import SynthesisConfig
     ratio = pitch_ratio(pitch)
     config = SynthesisConfig(length_scale=ratio / max(0.3, speed))
-    with wave.open(dest, "wb") as handle:
+    with wave.open(grok_store.extended_path(dest), "wb") as handle:
         _piper_cache[ref].synthesize_wav(text, handle, syn_config=config)
     scale_wav_rate(dest, ratio)
 

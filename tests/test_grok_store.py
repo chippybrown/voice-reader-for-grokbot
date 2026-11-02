@@ -764,7 +764,8 @@ class StoreTests(unittest.TestCase):
 
             def stat(path, *args, **kwargs):
                 # Listed, then replaced: the name is gone by the time we stat it.
-                if os.path.abspath(path) == os.path.abspath(moya):
+                # The reader stats the \\?\ form on Windows, so compare names.
+                if os.path.basename(path) == os.path.basename(moya):
                     try:
                         os.remove(path)
                     except OSError:
@@ -798,6 +799,68 @@ class StoreTests(unittest.TestCase):
         finally:
             grok_store._read_text = real
             os.stat = real_stat
+            grok_store._json_cache.clear()
+            grok_store._read_problems.clear()
+            shutil.rmtree(root)
+
+    def test_windows_extended_prefix_is_drive_or_unc(self):
+        self.assertEqual(grok_store._windows_long_path("C:\\foo\\bar"), "\\\\?\\C:\\foo\\bar")
+        self.assertEqual(grok_store._windows_long_path("\\\\server\\share\\a"), "\\\\?\\UNC\\server\\share\\a")
+        prefixed = "\\\\?\\C:\\foo\\bar"
+        self.assertEqual(grok_store._windows_long_path(prefixed), prefixed)
+        self.assertEqual(grok_store.extended_path(prefixed) if os.name == "nt" else prefixed, prefixed)
+        if os.name == "nt":
+            self.assertTrue(grok_store.extended_path("C:\\foo\\bar").startswith("\\\\?\\"))
+            self.assertTrue(grok_store.extended_path("\\\\server\\share\\a").startswith("\\\\?\\UNC\\"))
+        else:
+            path = os.path.join(tempfile.gettempdir(), "grokbot-voice-short")
+            self.assertEqual(grok_store.extended_path(path), path)
+            self.assertEqual(grok_store.extended_path("out.wav"), "out.wav")
+
+    def test_a_blob_past_max_path_is_read(self):
+        """A chat file whose full path is longer than 260 characters is still read."""
+        root = tempfile.mkdtemp()
+        grok_store._json_cache.clear()
+        grok_store._read_problems.clear()
+        try:
+            directory = root
+            filename = grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"
+            while len(os.path.abspath(os.path.join(directory, "sand-client-persistence", filename))) <= 260:
+                directory = os.path.join(directory, "d" * 40)
+            store = os.path.join(directory, "sand-client-persistence")
+            os.makedirs(grok_store.extended_path(store), exist_ok=True)
+            path = os.path.join(store, filename)
+            self.assertGreater(len(os.path.abspath(path)), 260)
+            roster = os.path.join(store, grok_store.encode_base32(
+                "sand.client.slice.account.a.roster.last-roster") + ".blob")
+            with open(grok_store.extended_path(roster), "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"}]}}')
+            with open(grok_store.extended_path(path), "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"entries":['
+                             '{"kind":"send-message","id":"long","seq":1,"timestampMs":1700000000000,'
+                             '"message":{"type":"text","content":"long path reply"}}]}}')
+            lines, names = grok_store.reply_lines(store)
+            self.assertTrue(any("long path reply" in line for line in lines), lines)
+            self.assertIn("Moya", names)
+            self.assertEqual(grok_store._read_problems, {})
+            _lines, _names, keys, active = grok_store.reply_snapshot(store)
+            seen = set()
+            grok_store.mark_seen(seen, keys)
+            with open(grok_store.extended_path(path), "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"entries":['
+                             '{"kind":"send-message","id":"long","seq":1,"timestampMs":1700000000000,'
+                             '"message":{"type":"text","content":"long path reply"}},'
+                             '{"kind":"send-message","id":"next","seq":2,"timestampMs":1700000005000,'
+                             '"message":{"type":"text","content":"spoken from a long path"}}]}}')
+            watched, _names, keys, followed, skipped = grok_store.watch_snapshot(
+                store, seen=seen, follow_path=active)
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertTrue(any("spoken from a long path" in line for line in fresh), fresh)
+            self.assertEqual(followed, path)
+            self.assertEqual(skipped, [])
+            self.assertEqual(grok_store._read_problems, {})
+        finally:
             grok_store._json_cache.clear()
             grok_store._read_problems.clear()
             shutil.rmtree(root)

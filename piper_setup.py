@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 import zipfile
 
+import grok_store
+
 RELEASE = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2"
 VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en"
 # Female: Jenny, Amy, Lessac, Alba, Cori, LJ Speech. Male: Ryan, Alan, Joe.
@@ -55,7 +57,7 @@ def binary_spec(system, machine):
 
 def _present(path):
     try:
-        return os.path.isfile(path) and os.path.getsize(path) > 0
+        return os.path.isfile(grok_store.extended_path(path)) and os.path.getsize(grok_store.extended_path(path)) > 0
     except OSError:
         return False
 
@@ -96,18 +98,18 @@ def preferred_index(labels, saved):
 def _extract(archive, piper_dir, kind):
     parent = os.path.dirname(os.path.abspath(piper_dir))
     if kind == "zip":
-        with zipfile.ZipFile(archive) as bundle:
+        with zipfile.ZipFile(grok_store.extended_path(archive)) as bundle:
             names = bundle.namelist()
             for name in names:
                 if name.startswith("/") or ".." in name.replace("\\", "/").split("/"):
                     raise RuntimeError("unsafe archive")
-            bundle.extractall(parent)
+            bundle.extractall(grok_store.extended_path(parent))
     else:
-        with tarfile.open(archive) as bundle:
+        with tarfile.open(grok_store.extended_path(archive)) as bundle:
             for member in bundle.getmembers():
                 if member.name.startswith("/") or ".." in member.name.split("/"):
                     raise RuntimeError("unsafe archive")
-            bundle.extractall(parent)
+            bundle.extractall(grok_store.extended_path(parent))
 
 
 def _fetch(url, dest, urlopen):
@@ -117,14 +119,14 @@ def _fetch(url, dest, urlopen):
     for attempt in range(ATTEMPTS):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "GrokbotVoice"})
-            with opener(request, timeout=120) as response, open(partial, "wb") as out:
+            with opener(request, timeout=120) as response, open(grok_store.extended_path(partial), "wb") as out:
                 shutil.copyfileobj(response, out)
-            os.replace(partial, dest)
+            os.replace(grok_store.extended_path(partial), grok_store.extended_path(dest))
             return
         except (OSError, urllib.error.URLError, TimeoutError) as exc:
             last = exc
             try:
-                os.remove(partial)
+                os.remove(grok_store.extended_path(partial))
             except OSError:
                 pass
             if attempt + 1 < ATTEMPTS:
@@ -139,7 +141,7 @@ def ensure(piper_dir, system, progress, machine=None, urlopen=None):
     voices it already has and returns False instead of raising.
     """
     machine = machine or __import__("platform").machine()
-    os.makedirs(piper_dir, exist_ok=True)
+    os.makedirs(grok_store.extended_path(piper_dir), exist_ok=True)
     needed = missing_items(piper_dir, system, machine)
     if not needed:
         return True
@@ -152,13 +154,13 @@ def ensure(piper_dir, system, progress, machine=None, urlopen=None):
                 _fetch(url, archive, urlopen)
                 _extract(archive, piper_dir, kind)
                 try:
-                    os.remove(archive)
+                    os.remove(grok_store.extended_path(archive))
                 except OSError:
                     pass
                 if not _present(dest):
                     raise RuntimeError("Piper did not unpack")
             else:
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                os.makedirs(grok_store.extended_path(os.path.dirname(dest)), exist_ok=True)
                 _fetch(url, dest, urlopen)
         except Exception:
             progress("Piper voices unavailable. Using built-in voices.")
