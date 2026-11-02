@@ -190,20 +190,24 @@ def main():
     if os.path.isfile(log_path):
         with open(log_path, encoding="utf-8", errors="replace") as handle:
             text = handle.read()
-    spoken = "piper says hello" in text and "(natural)" in text and "Voice problem" not in text
+    spoken = "piper says hello" in text and "(natural)" in text
     ran = os.path.isfile(os.path.join(piper, "piper-ran.txt"))
     wav = os.path.join(temp, "grok_voice_say.wav")
     heard = os.path.isfile(wav) and os.path.getsize(wav) > 44
+    # A runner with no sound device still synthesizes. Only that playback error is allowed.
+    problems = [line for line in text.splitlines() if "Voice problem" in line]
+    play_ok = all("Failed to play sound" in line for line in problems)
     print("--- log ---")
     print(text)
-    print("--- summary spoken %s ran %s wav %s windows %s exit %s ---" % (
+    print("--- summary spoken %s ran %s wav %s play %s windows %s exit %s ---" % (
         "yes" if spoken else "no",
         "yes" if ran else "no",
         "yes" if heard else "no",
+        "yes" if play_ok and not problems else ("no-device" if play_ok else "no"),
         ",".join(seen.values()) or "none",
         proc.returncode,
     ))
-    if spoken and ran and heard and not seen and proc.returncode == 0:
+    if spoken and ran and heard and play_ok and not seen and proc.returncode == 0:
         return 0
     return 1
 
