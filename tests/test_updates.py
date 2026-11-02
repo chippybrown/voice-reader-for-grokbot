@@ -126,13 +126,22 @@ class UpdateTests(unittest.TestCase):
                 urlopen, os.path.join(directory, "log.txt"), popen=popen)
             with open(script, encoding="utf-8") as handle:
                 text = handle.read()
-            self.assertIn('PID eq 99', text)
-            self.assertIn(r"Grokbot Voice.exe", text)
-            self.assertIn("move /Y", text)
+            self.assertIn("ProcessRunning(99)", text)
+            self.assertIn("tries > 80", text)
+            self.assertIn("Grokbot Voice.exe", text)
+            self.assertIn("CopyFile", text)
+            self.assertNotIn("tasklist", text.lower())
+            self.assertNotIn("find ", text.lower())
             self.assertNotIn("python.exe", text.lower())
-            self.assertEqual(calls[0][0][0], "cmd")
+            args = calls[0][0]
+            self.assertTrue(args[0].lower().endswith("wscript.exe"))
+            self.assertIn("//B", args)
+            flags = calls[0][1].get("creationflags") or 0
+            self.assertEqual(flags & 0x00000008, 0)
+            self.assertNotEqual(flags & 0x08000000, 0)
             source = updates.windows_script(3, directory + os.sep + "new.exe", directory + os.sep + "new.exe")
-            self.assertNotIn("move /Y", source)
+            self.assertIn("copied = True", source)
+            self.assertNotIn("ReplaceExe(fso", source)
         finally:
             shutil.rmtree(directory, ignore_errors=True)
 

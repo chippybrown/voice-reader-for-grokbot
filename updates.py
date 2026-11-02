@@ -176,35 +176,82 @@ def _download(url, dest, urlopen, timeout=120):
     os.replace(partial, dest)
 
 
-def _cmd_quote(path):
-    return '"' + str(path).replace('"', '""') + '"'
+def _vbs_string(text):
+    return '"' + str(text).replace('"', '""') + '"'
 
 
 def windows_script(pid, downloaded, destination):
-    """Wait until this process is gone, then replace the exe and start it. No admin."""
+    """Hidden script: wait until this process is gone, then replace the exe and start it.
+
+    A cmd loop that pipes tasklist into find opens a console titled find "pid"
+    when the helper has no console of its own, and that loop never notices
+    the app has exited. WScript asks Windows whether the pid is still there,
+    stops after a short budget of tries, and does not open a window.
+    """
     pid = int(pid)
-    lines = [
-        "@echo off",
-        ":wait",
-        'tasklist /FI "PID eq %d" 2>nul | find "%d" >nul' % (pid, pid),
-        "if not errorlevel 1 (",
-        "  ping -n 2 127.0.0.1 >nul",
-        "  goto wait",
-        ")",
-    ]
     same = os.path.normcase(os.path.abspath(downloaded)) == os.path.normcase(os.path.abspath(destination))
-    src = _cmd_quote(downloaded)
-    dst = _cmd_quote(destination)
-    if same:
-        lines.append("start \"\" %s" % src)
-    else:
-        lines.append("move /Y %s %s" % (src, dst))
-        lines.append("if errorlevel 1 (")
-        lines.append("  start \"\" %s" % src)
-        lines.append(") else (")
-        lines.append("  start \"\" %s" % dst)
-        lines.append(")")
-    lines.append('del "%~f0"')
+    src = _vbs_string(downloaded)
+    dst = _vbs_string(destination)
+    # 80 tries at a quarter second is 20 seconds, then the swap runs anyway.
+    lines = [
+        "Option Explicit",
+        "Dim shell, fso, tries, copied",
+        "Set shell = CreateObject(\"WScript.Shell\")",
+        "Set fso = CreateObject(\"Scripting.FileSystemObject\")",
+        "tries = 0",
+        "Do",
+        "  tries = tries + 1",
+        "  If tries > 80 Then Exit Do",
+        "  If Not ProcessRunning(%d) Then Exit Do" % pid,
+        "  WScript.Sleep 250",
+        "Loop",
+        "copied = %s" % ("True" if same else "False"),
+    ]
+    if not same:
+        lines.extend([
+            "If Not copied Then",
+            "  copied = ReplaceExe(fso, %s, %s)" % (src, dst),
+            "End If",
+        ])
+    lines.extend([
+        "If copied Then",
+        "  shell.Run %s, 1, False" % _vbs_string('"' + (downloaded if same else destination) + '"'),
+        "Else",
+        "  shell.Run %s, 1, False" % _vbs_string('"' + downloaded + '"'),
+        "End If",
+        "On Error Resume Next",
+        "fso.DeleteFile WScript.ScriptFullName, True",
+        "",
+        "Function ProcessRunning(pid)",
+        "  On Error Resume Next",
+        "  Dim items",
+        "  Set items = GetObject(\"winmgmts:\\\\.\\root\\cimv2\").ExecQuery(\"SELECT ProcessId FROM Win32_Process WHERE ProcessId = \" & CLng(pid))",
+        "  If Err.Number <> 0 Then",
+        "    ProcessRunning = False",
+        "  Else",
+        "    ProcessRunning = (items.Count > 0)",
+        "  End If",
+        "End Function",
+        "",
+    ])
+    if not same:
+        lines.extend([
+            "Function ReplaceExe(fso, src, dst)",
+            "  Dim attempt",
+            "  ReplaceExe = False",
+            "  For attempt = 1 To 10",
+            "    On Error Resume Next",
+            "    Err.Clear",
+            "    fso.CopyFile src, dst, True",
+            "    If Err.Number = 0 Then",
+            "      ReplaceExe = True",
+            "      Exit Function",
+            "    End If",
+            "    WScript.Sleep 400",
+            "  Next",
+            "End Function",
+            "",
+        ])
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -240,8 +287,9 @@ def _spawn(popen, args, system):
         "close_fds": True,
     }
     if system == "win32":
-        # Detach so the helper keeps running after this program exits.
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+        # CREATE_NO_WINDOW, and not DETACHED_PROCESS. Detached drops the
+        # console flag and each console tool then opens a window of its own.
+        kwargs["creationflags"] = 0x00000200 | 0x08000000
     else:
         kwargs["start_new_session"] = True
     return popen(args, **kwargs)
@@ -271,10 +319,17 @@ def apply(result, system, pid, executable, frozen, directory, urlopen, log_path,
             destination = executable
         else:
             destination = downloaded
-        script = os.path.join(directory, "update-run.cmd")
+        script = os.path.join(directory, "update-run.vbs")
+        try:
+            os.remove(os.path.join(directory, "update-run.cmd"))
+        except OSError:
+            pass
         with open(script, "w", encoding="utf-8", newline="") as handle:
             handle.write(windows_script(pid, downloaded, destination))
-        _spawn(popen, ["cmd", "/c", script], "win32")
+        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+        wscript = os.path.join(root, "System32", "wscript.exe") if root else "wscript.exe"
+        # //B is batch mode: no script errors and no console window.
+        _spawn(popen, [wscript, "//B", "//Nologo", script], "win32")
         return script
     installer = os.path.join(directory, "install-mint.update.sh")
     _download(INSTALLER_URL, installer, urlopen, timeout=60)
