@@ -1119,11 +1119,8 @@ def _tick():
                 # A different chat that is still on disk replaces history and
                 # is not read aloud. The same file, or the first file we can
                 # lock onto, speaks replies that arrived after launch.
+                state["missing"] = 0
                 previous = state.get("file_key")
-                if previous and not os.path.exists(grok_store.extended_path(previous)):
-                    previous = None
-                    state["history"] = []
-                    state["file_key"] = None
                 moved = previous and active != previous
                 if moved:
                     state["file_key"] = active
@@ -1193,7 +1190,13 @@ def _tick():
                         state["pos"] = None
                         state["queue"].append(reply)
             elif state.get("file_key") and not os.path.exists(grok_store.extended_path(state["file_key"])):
-                state["file_key"] = None
+                # The blob is deleted for a moment during a save. Keep the chat
+                # so the replacement's new replies are not marked already read.
+                kept, state["missing"] = grok_store.hold_open_file(
+                    state["file_key"], False, active, state.get("missing"))
+                if kept is None:
+                    state["history"] = []
+                    state["file_key"] = None
         except Exception as exc:
             message = repr(exc)
             if state.get("watch_error") != message:

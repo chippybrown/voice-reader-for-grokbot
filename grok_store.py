@@ -1156,6 +1156,22 @@ def unseen_lines(seen, lines, keylists):
     return fresh
 
 
+def hold_open_file(previous, exists, active, misses):
+    """Keep the open chat while its blob is deleted and renamed back.
+
+    Grok Bot removes the file, then renames the new one into place. One poll
+    can see it missing. Forgetting the chat at that moment marks every reply
+    in the replacement, including the ones that just arrived, as already read.
+    Returns (file to keep or None, miss count).
+    """
+    if not previous or exists or active == previous:
+        return previous, 0
+    misses = int(misses or 0) + 1
+    if misses >= 3:
+        return None, 0
+    return previous, misses
+
+
 def merge_open_replies(history, seen, lines, keylists):
     """Append every new reply in the open chat, in order.
 

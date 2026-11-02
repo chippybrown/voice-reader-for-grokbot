@@ -98,6 +98,28 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_a_replaced_blob_does_not_swallow_the_new_replies(self):
+        path = os.path.join("store", "moya.blob")
+        kept, misses = grok_store.hold_open_file(path, False, None, 0)
+        self.assertEqual(kept, path)
+        self.assertEqual(misses, 1)
+        kept, misses = grok_store.hold_open_file(kept, True, path, misses)
+        self.assertEqual((kept, misses), (path, 0))
+        history = ["Moya 9:24:54 AM #2 The fix for reading the newest reply is being built."]
+        seen = set()
+        grok_store.mark_seen(seen, [["id:r2", "h:old"]])
+        lines = history + [
+            "Moya 9:25:59 AM #3 Good news. Just to check.",
+            "Moya 9:26:54 AM #4 Got it. It reads one new reply.",
+        ]
+        keys = [["id:r2", "h:old"], ["id:r3", "h:a"], ["id:r4", "h:b"]]
+        # The id from before the replace is already known. The two new ones are not.
+        seen.update(["id:r2", "h:old"])
+        fresh = grok_store.merge_open_replies(history, seen, lines, keys)
+        self.assertEqual(len(fresh), 2)
+        self.assertIn("Good news", fresh[0])
+        self.assertIn("Got it", fresh[1])
+
     def test_two_quick_replies_during_playback_stay_in_order(self):
         """Two new replies land in the open file while Back is holding an older line."""
         root = tempfile.mkdtemp()
