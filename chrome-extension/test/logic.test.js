@@ -101,7 +101,7 @@ test("a new reply is spoken once after it stops changing", async () => {
   assert.deepEqual(spoken, ["The newest answer is ready."]);
 });
 
-test("growth after the reply was spoken is not spoken again", async () => {
+test("a changed reply is spoken once after it settles again", async () => {
   const spoken = [];
   const session = GV.createSession({ settleMs: 30, onSpeak: (text) => spoken.push(text) });
   session.arm([]);
@@ -111,8 +111,10 @@ test("growth after the reply was spoken is not spoken again", async () => {
   assert.deepEqual(spoken, [first]);
   const grown = first + " More words arrived.";
   session.watch([{ key: "new", raw: grown, speech: grown }]);
-  await delay(60);
+  await delay(20);
   assert.deepEqual(spoken, [first]);
+  await delay(50);
+  assert.deepEqual(spoken, [first, grown]);
 });
 
 test("stop drops a reply that has not been spoken yet", async () => {

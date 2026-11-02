@@ -83,3 +83,89 @@ test("streamdown body is returned and the bot name is not", { timeout: 30000 }, 
     await browser.close().catch(() => {});
   }
 });
+
+test("the last assistant message is chosen, and a newer one is spoken", { timeout: 30000 }, async () => {
+  const browser = await puppeteer.launch({
+    executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
+  });
+  const block = "break-words last:mb-0 streamdown-first-block:mt-0";
+  function bubble(id, text) {
+    return `<div class="turn start" id="${id}"><div class="card"><div class="who">Moya</div><div class="pad gray"><p dir="auto" class="${block}" style="white-space: pre-wrap;">${text}</p></div></div></div>`;
+  }
+  const pageHtml = `<!DOCTYPE html>
+<html><head><style>
+  #thread { overflow-y: auto; height: 520px; display: flex; flex-direction: column; gap: 12px; background: #16181d; }
+  .turn { display: flex; width: 100%; }
+  .start { justify-content: flex-start; }
+  .end { justify-content: flex-end; }
+  .pad { border-radius: 16px; padding: 10px 14px; max-width: 75%; }
+  .gray { background: #2b2e36; color: #f3f3f3; }
+  .purple { background: #6d28d9; color: #fff; }
+  .from { color: #bbb; font-size: 13px; align-self: center; }
+</style></head><body>
+  <div id="thread">
+    ${bubble("a1", "First assistant reply stays quiet.")}
+    <div class="from">Message from Grokbot Voice Chrome extension prototype Project</div>
+    ${bubble("a2", "Second assistant reply stays quiet.")}
+    <div class="turn end"><div class="pad purple"><p dir="auto" class="${block}" style="white-space: pre-wrap;">Okay, I heard the voice.</p></div></div>
+    ${bubble("a3", "Third assistant reply is the one to read.")}
+  </div>
+</body></html>`;
+  try {
+    const page = await browser.newPage();
+    await page.setContent(pageHtml, { waitUntil: "domcontentloaded" });
+    for (const file of ["src/config.js", "src/text.js", "src/detect.js", "src/reader.js"]) {
+      await page.addScriptTag({ path: path.join(root, file) });
+    }
+    const result = await page.evaluate(() => {
+      const GV = globalThis.GrokVoice;
+      const spoken = [];
+      const keys = new WeakMap();
+      let seq = 1;
+      function keyFor(el) {
+        let key = keys.get(el);
+        if (!key) {
+          key = "el:" + (seq++);
+          keys.set(el, key);
+        }
+        return key;
+      }
+      function records() {
+        return GV.detectAssistantReplies(document).map((reply) => ({
+          key: keyFor(reply.element),
+          raw: reply.raw,
+          speech: reply.speech
+        }));
+      }
+      const before = GV.latestAssistantReply(document);
+      const session = GV.createSession({
+        settleMs: 40,
+        onSpeak: (text) => spoken.push(text)
+      });
+      session.arm(records());
+      document.getElementById("thread").insertAdjacentHTML("beforeend",
+        `<div class="turn start" id="a4"><div class="card"><div class="who">Moya</div><div class="pad gray"><p dir="auto" class="break-words last:mb-0 streamdown-first-block:mt-0" style="white-space: pre-wrap;">Fourth assistant reply should be spoken.</p></div></div></div>`);
+      const after = GV.latestAssistantReply(document);
+      session.watch(records());
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({
+          before: before ? before.speech : "",
+          after: after ? after.speech : "",
+          spoken
+        }), 120);
+      });
+    });
+    assert.equal(result.before, "Third assistant reply is the one to read.");
+    assert.equal(result.before.includes("Moya"), false);
+    assert.equal(result.before.includes("First assistant"), false);
+    assert.equal(result.before.includes("Second assistant"), false);
+    assert.equal(result.before.includes("Message from"), false);
+    assert.equal(result.before.includes("Okay, I heard the voice"), false);
+    assert.equal(result.after, "Fourth assistant reply should be spoken.");
+    assert.deepEqual(result.spoken, ["Fourth assistant reply should be spoken."]);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});

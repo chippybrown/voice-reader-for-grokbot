@@ -27,8 +27,9 @@ After you reload the extension, reload the Grok tab too. Chrome does not reinjec
 2. Turn on **Developer mode**.
 3. Click **Load unpacked**.
 4. Choose this same `chrome-extension` folder.
+5. Reload the Grok tab.
 
-Edge uses the same Manifest V3 package. The **ON** badge, popup, and voices work the same way.
+Edge uses this same Manifest V3 package. The toolbar badge, popup, and voices work the same way. It stays on APIs Edge supports: `storage`, `activeTab`, `action`, `tabs`, `runtime`, plus the page `speechSynthesis` and `MutationObserver`. There are no Chrome-only APIs.
 
 ## Which pages it runs on
 
@@ -46,7 +47,7 @@ Chrome ignores the path on a host permission and grants the whole site. Prefer a
 
 ## How a reply is chosen
 
-The watcher listens to the whole document. It does not need a `data-testid`.
+The watcher reads the document again on every change and keeps the bottom-most assistant message in the chat. It does not keep the first bubble it found.
 
 Assistant text on grok.com is rendered by Streamdown. The reader uses only those blocks: a `p` with `dir="auto"` whose class contains `streamdown` (for example `streamdown-first-block:mt-0`), plus any list, heading, or table in that same markdown box. The bot name above the reply, the time, and the buttons are not part of that box, so they are not spoken. Several blocks in one box are one reply. A new or changed message is spoken after its text stays still for about 1.5 seconds, and only once.
 

@@ -30,7 +30,6 @@
     var historical = new Set();
     var baselineText = new Map();
     var baselineSpeech = new Set();
-    var lastBaselineRaw = "";
     var spoken = new Set();
     var spokenKey = "";
     var spokenRaw = "";
@@ -65,10 +64,10 @@
     // the first quiet gap, is not spoken again. Replay does not use this.
     function alreadyCovered(message) {
       var speech = String(message.speech || "").trim();
-      if (speech && spoken.has(speech)) return true;
-      if (spokenKey && message.key === spokenKey) return true;
-      var raw = String(message.raw || "");
-      if (spokenRaw && raw && spokenRaw.length >= 24 && raw.indexOf(spokenRaw) === 0) return true;
+      if (!speech) return true;
+      if (spoken.has(speech)) return true;
+      // The same bubble already read, and the words have not changed.
+      if (spokenKey && message.key === spokenKey && speech === lastSpoken) return true;
       return false;
     }
 
@@ -82,30 +81,16 @@
       }, settleMs);
     }
 
+    // Only the bubble that was already on screen, with the same body, stays quiet.
+    // A different element, or a body that is not that saved text, is a new reply.
     function isHistorical(message) {
       var raw = message.raw || "";
       var speech = message.speech || "";
-      if (historical.has(message.key)) {
-        var prev = baselineText.get(message.key) || "";
-        var recycled = prev && raw && !continues(prev, raw) && !baselineSpeech.has(speech);
-        if (!recycled) {
-          if (raw) baselineText.set(message.key, raw);
-          return true;
-        }
-        historical.delete(message.key);
-      }
-      if (speech && baselineSpeech.has(speech)) {
-        historical.add(message.key);
-        if (raw) baselineText.set(message.key, raw);
-        return true;
-      }
-      if (continues(lastBaselineRaw, raw)) {
-        historical.add(message.key);
-        baselineText.set(message.key, raw);
-        if (speech) baselineSpeech.add(speech);
-        if (raw.length >= lastBaselineRaw.length) lastBaselineRaw = raw;
-        return true;
-      }
+      if (!historical.has(message.key)) return false;
+      var prev = baselineText.get(message.key) || "";
+      if (!raw || raw === prev) return true;
+      if (prev && continues(prev, raw)) return true;
+      if (speech && baselineSpeech.has(speech)) return true;
       return false;
     }
 
@@ -124,7 +109,6 @@
         historical = new Set();
         baselineText = new Map();
         baselineSpeech = new Set();
-        lastBaselineRaw = "";
         clearTimer();
         pending = null;
         var list = messages || [];
@@ -135,7 +119,6 @@
           var raw = message.raw || "";
           baselineText.set(message.key, raw);
           if (message.speech) baselineSpeech.add(message.speech);
-          if (raw) lastBaselineRaw = raw;
         }
       },
 

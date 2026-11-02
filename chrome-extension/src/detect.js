@@ -178,15 +178,45 @@
     return false;
   }
 
+  function hasMessageFromLabel(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var text = plainText(el);
+    if (/^Message from\b/i.test(text) && text.length < 240) return true;
+    if (el.children && el.children.length && el.children.length < 8) {
+      var nodes = el.querySelectorAll("*");
+      for (var i = 0; i < nodes.length && i < 16; i++) {
+        var inner = plainText(nodes[i]);
+        if (/^Message from\b/i.test(inner) && inner.length < 240) return true;
+      }
+    }
+    return false;
+  }
+
+  // Another assistant or user bubble, or a "Message from …" row, means this
+  // parent holds several messages. Sibling paragraphs in one bubble do not.
+  function boundaryParent(parent, branch) {
+    var children = parent.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (child === branch || child.contains(branch)) continue;
+      if (isContentBlock(child)) continue;
+      if (containsStreamdownParagraph(child)) return true;
+      if (hasMessageFromLabel(child)) return true;
+    }
+    return false;
+  }
+
   function messageRowOf(block, list) {
     var node = block;
     var doc = block.ownerDocument;
     var guard = 0;
-    while (node.parentElement && guard < 24) {
+    while (node.parentElement && guard < 30) {
       guard += 1;
       var parent = node.parentElement;
       if (parent === doc.body || parent === doc.documentElement) break;
-      if ((list && parent === list) || isScrollList(parent) || separatesIntoDistinctMessages(parent)) break;
+      if (list && parent === list) break;
+      if (boundaryParent(parent, node) || separatesIntoDistinctMessages(parent)) break;
+      if (isScrollList(parent) && boundaryParent(parent, node)) break;
       node = parent;
     }
     return node;
@@ -304,30 +334,119 @@
     return found;
   }
 
-  // Replies in document order. element is the message row (identity). body is
-  // the markdown box (what Show-what-it-detects outlines). speech is the body.
+  function textBetween(before, after) {
+    try {
+      var range = before.ownerDocument.createRange();
+      range.setStartAfter(before);
+      range.setEndBefore(after);
+      return range.toString();
+    } catch (err) {
+      return "";
+    }
+  }
+
+  // Paragraphs are in document order. A "Message from …" row between two
+  // bubbles starts a new message even if they share a wrapper.
+  function clusterParagraphs(paragraphs, list) {
+    var clusters = [];
+    for (var i = 0; i < paragraphs.length; i++) {
+      var paragraph = paragraphs[i];
+      var previous = clusters.length ? clusters[clusters.length - 1] : null;
+      var lastParagraph = previous ? previous.paragraphs[previous.paragraphs.length - 1] : null;
+      var split = !previous || /Message from\b/i.test(textBetween(lastParagraph, paragraph));
+      if (!split) {
+        var left = messageRowOf(lastParagraph, list);
+        var right = messageRowOf(paragraph, list);
+        if (left !== right && !left.contains(paragraph) && !right.contains(lastParagraph)) split = true;
+      }
+      if (split) clusters.push({ paragraphs: [paragraph] });
+      else previous.paragraphs.push(paragraph);
+    }
+    return clusters;
+  }
+
+  function speechOfCluster(paragraphs) {
+    var wanted = new Set();
+    var boxes = [];
+    var i;
+    for (i = 0; i < paragraphs.length; i++) {
+      wanted.add(paragraphs[i]);
+      var box = markdownBox(paragraphs[i]);
+      if (boxes.indexOf(box) === -1) boxes.push(box);
+    }
+    var parts = [];
+    for (i = 0; i < boxes.length; i++) {
+      var nodes = boxes[i].querySelectorAll("p, ul, ol, pre, blockquote, h1, h2, h3, h4, h5, h6, table");
+      var blocks = [];
+      var n;
+      for (n = 0; n < nodes.length; n++) {
+        var el = nodes[n];
+        if (el.tagName === "P") {
+          if (!wanted.has(el)) continue;
+        } else if (!EXTRA_TAG[el.tagName] || ignored(el)) continue;
+        var nested = false;
+        var j;
+        for (j = 0; j < blocks.length; j++) {
+          if (blocks[j].contains(el)) nested = true;
+        }
+        if (nested) continue;
+        blocks = blocks.filter(function (other) { return !el.contains(other); });
+        blocks.push(el);
+      }
+      for (n = 0; n < blocks.length; n++) {
+        var text = GV.visibleSpeech(blocks[n]);
+        if (text) parts.push(text);
+      }
+    }
+    return parts.join(" ");
+  }
+
+  // Replies in document order, top to bottom. The last entry is the one to read.
+  // Nothing here is cached: callers resolve it again after every mutation.
   GV.detectAssistantReplies = function detectAssistantReplies(doc) {
     var body = doc.body || doc.documentElement;
     if (!body) return [];
     var list = findMessageList(doc);
-    var paragraphs = streamdownParagraphs(list || body);
-    var seen = new Set();
-    var replies = [];
+    var all = streamdownParagraphs(body);
+    var paragraphs = all;
+    if (list) {
+      var inside = [];
+      for (var n = 0; n < all.length; n++) {
+        if (list.contains(all[n])) inside.push(all[n]);
+      }
+      if (inside.length && inside.length === all.length) paragraphs = inside;
+    }
+    var kept = [];
     for (var i = 0; i < paragraphs.length; i++) {
-      var row = messageRowOf(paragraphs[i], list);
-      if (!row || seen.has(row)) continue;
-      seen.add(row);
-      if (isUserStyled(row, list || body)) continue;
-      var speech = GV.replySpeech(row);
+      if (!isUserStyled(paragraphs[i], list || body)) kept.push(paragraphs[i]);
+    }
+    var clusters = clusterParagraphs(kept, list);
+    var replies = [];
+    for (i = 0; i < clusters.length; i++) {
+      var group = clusters[i].paragraphs;
+      var speech = speechOfCluster(group);
       if (!speech) continue;
+      var box = markdownBox(group[0]);
       replies.push({
-        element: row,
-        body: markdownBox(paragraphs[i]),
+        element: box,
+        body: box,
         speech: speech,
         raw: speech
       });
     }
+    replies.sort(function (a, b) {
+      if (!a.element || !b.element || a.element === b.element) return 0;
+      var pos = a.element.compareDocumentPosition(b.element);
+      if (pos & 4) return -1;
+      if (pos & 2) return 1;
+      return 0;
+    });
     return replies;
+  };
+
+  GV.latestAssistantReply = function latestAssistantReply(doc) {
+    var replies = GV.detectAssistantReplies(doc);
+    return replies.length ? replies[replies.length - 1] : null;
   };
 
   GV.elementPath = function elementPath(el) {

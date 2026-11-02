@@ -151,13 +151,15 @@
       return;
     }
     ensureDebugStyle();
+    // Always the bottom-most assistant body from this scan. Never reuse the
+    // first bubble found on an earlier pass.
     var latest = replies.length ? replies[replies.length - 1] : null;
     var target = latest ? (latest.body || latest.element) : null;
-    if (!target) {
+    if (!target || target.isConnected === false) {
       clearDebug();
       return;
     }
-    if (debugEl === target) return;
+    if (debugEl === target && target.classList.contains(DEBUG_CLASS)) return;
     clearDebug();
     debugEl = target;
     target.classList.add(DEBUG_CLASS);
