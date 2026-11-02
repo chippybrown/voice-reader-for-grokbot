@@ -55,17 +55,71 @@ def key_help():
     return "Paste your xAI API key (from console.x.ai).\nIt's saved in your login keyring for this Linux account."
 
 
+def key_file():
+    """A copy of the xAI key the installer does not delete."""
+    return os.path.join(config_dir(), "xai-key")
+
+
+def _write_key_file(path, key):
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(handle, key.encode("utf-8"))
+    finally:
+        os.close(handle)
+    os.chmod(path, 0o600)
+
+
+def preserve_key_file(path, read_key=None):
+    """Keep a keyring key in the config file. Returns kept, exported, or missing."""
+    if path and os.path.isfile(path) and os.path.getsize(path) > 0:
+        return "kept"
+    if read_key is None:
+        def read_key():
+            import keyring
+            return keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
+    try:
+        key = (read_key() or "").strip()
+    except Exception:
+        key = ""
+    if not key:
+        return "missing"
+    _write_key_file(path, key)
+    return "exported"
+
+
 def load_key():
+    path = key_file()
+    key = ""
     try:
         import keyring
-        return keyring.get_password(KEYRING_SERVICE, KEYRING_USER) or ""
+        key = (keyring.get_password(KEYRING_SERVICE, KEYRING_USER) or "").strip()
     except Exception:
+        key = ""
+    if key:
+        try:
+            if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+                preserve_key_file(path, lambda: key)
+        except Exception:
+            pass
+        return key
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
         return ""
 
 
 def save_key(key):
-    import keyring
-    keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key.strip())
+    key = key.strip()
+    try:
+        import keyring
+        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
+    except Exception:
+        pass
+    _write_key_file(key_file(), key)
 
 
 def hide_console():

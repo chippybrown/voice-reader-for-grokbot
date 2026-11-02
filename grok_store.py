@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 
 
 PERSISTENCE_NAME = "sand-client-persistence"
@@ -200,11 +201,30 @@ def _read_text(path):
         return handle.read()
 
 
-def _load_value(path):
+# path -> (mtime_ns, size, parsed json). Idle polling must not re-read unchanged chats.
+_json_cache = {}
+
+
+def _parsed_json(path):
+    """Parse a blob once until its size or modification time changes."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    token = (getattr(stat, "st_mtime_ns", stat.st_mtime), getattr(stat, "st_ctime_ns", 0), stat.st_size)
+    cached = _json_cache.get(path)
+    if cached and cached[0] == token:
+        return cached[1]
     try:
         parsed = json.loads(_read_text(path))
     except (OSError, json.JSONDecodeError):
-        return None
+        parsed = None
+    _json_cache[path] = (token, parsed)
+    return parsed
+
+
+def _load_value(path):
+    parsed = _parsed_json(path)
     if not isinstance(parsed, dict):
         return None
     value = parsed.get("value")
@@ -326,6 +346,41 @@ _MD_LINK = re.compile(r"!\[([^\]]*)\]\([^)]+\)|\[([^\]]+)\]\([^)]+\)|\[([^\]]+)\
 _AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
 
 
+def plain_label(text):
+    """Letters and numbers only, so an emoji in a bot name is not spoken or logged as '?'."""
+    kept = []
+    for char in str(text or ""):
+        if char == "\ufffd":
+            continue
+        category = unicodedata.category(char)
+        if category.startswith(("L", "N", "Z")) or (category.startswith("P") and char.isascii() and char != "?"):
+            kept.append(char)
+        elif char in "&/-+*'":
+            kept.append(char)
+    cleaned = "".join(kept)
+    cleaned = re.sub(r"(?<=\S)\?(?=\s)", "", cleaned)
+    return " ".join(cleaned.split())
+
+
+def speech_key(text):
+    """Identity of words already spoken. Emoji and symbols do not make a new line."""
+    plain = plain_label(text)
+    if not plain:
+        return ""
+    return hashlib.sha256(plain.encode("utf-8")).hexdigest()
+
+
+def allow_auto_speech(spoken, text, replay=False):
+    """False when this automatic read was already spoken. Back may repeat it."""
+    key = speech_key(text)
+    if not key:
+        return bool(replay)
+    if key in spoken and not replay:
+        return False
+    spoken.add(key)
+    return True
+
+
 def render_speech(text):
     """The words a person would read on screen, without markdown chrome.
 
@@ -362,7 +417,7 @@ def render_speech(text):
         line = " ".join(line.split())
         if line:
             pieces.append(line)
-    return ". ".join(pieces)
+    return plain_label(". ".join(pieces))
 
 
 def _entry_text(entry):
@@ -408,8 +463,8 @@ def entry_keys(entry, bot, text):
     when a rewrite assigns a new id but the text is unchanged.
     """
     keys = ["id:" + value for value in _message_ids(entry)]
-    rendered = " ".join((text or "").split())
-    raw = "%s\n%s" % (bot, rendered)
+    rendered = plain_label(text)
+    raw = "%s\n%s" % (plain_label(bot), rendered)
     keys.append("h:" + hashlib.sha256(raw.encode("utf-8")).hexdigest())
     return keys
 
@@ -481,10 +536,7 @@ def _flag_is_on(row, flag):
 
 
 def _document_value(path):
-    try:
-        parsed = json.loads(_read_text(path))
-    except (OSError, json.JSONDecodeError):
-        return None
+    parsed = _parsed_json(path)
     if isinstance(parsed, dict) and "value" in parsed:
         return parsed.get("value")
     return parsed
@@ -698,56 +750,92 @@ def _row_for(rows, account, agent_id):
     return None
 
 
-def active_transcript(directory, window_titles=None, directories=None):
-    """The conversation on screen now, checked again from the files every time.
+def _chat_was_opened(row):
+    """True when the transcript file was saved again without a new message.
 
-    A saved selection from an earlier bot or an earlier account must not pin
-    the reader. The window title wins when it names one bot, because that is
-    the chat Chip is looking at. Otherwise the account is the one whose
-    roster or selection was written last, not the transcript a background
-    bot just updated. Inside that account the newest selection wins, then a
-    roster row marked selected, then the newest message from the user, then
-    the newest file. Switching chats does not speak the backlog; the caller
-    marks the lines already in the new file as seen.
+    Opening a chat rewrites its file. A bot reply does not: the newest
+    message and the file time match. The window title is not used.
     """
-    slices, rows, names = _load_stores(_store_list(directory, directories))
+    newest = None
+    for entry in row["entries"]:
+        if isinstance(entry, dict) and isinstance(entry.get("timestampMs"), (int, float)):
+            stamp = entry["timestampMs"]
+            newest = stamp if newest is None else max(newest, stamp)
+    if newest is None:
+        return False
+    return row["stamp"] > (newest / 1000.0) + 5
+
+
+def _focused_opens(rows):
+    """The chat whose file was saved again well after the others, or none.
+
+    A sync that rewrites every transcript at once is not a bot switch.
+    """
+    opened = [row for row in rows if _chat_was_opened(row)]
+    if len(opened) <= 1:
+        return opened
+    opened.sort(key=lambda row: row["stamp"])
+    if opened[-1]["stamp"] > opened[-2]["stamp"] + 5:
+        return [opened[-1]]
+    return []
+
+
+def active_transcript(directory, window_titles=None, directories=None):
+    """The conversation on screen now, from the saved files only.
+
+    The window title is ignored on every platform. A bare "Grok Bot" title
+    names no bot, and a title that does is still not the source of truth.
+    The open chat is the transcript that was rewritten when it was shown,
+    if exactly one was. Otherwise it is the saved selection, then a roster
+    row marked selected, then the only transcript in the account. Several
+    chats and no fresh signal means we are not sure: return None so Back
+    stays quiet instead of playing a different bot.
+    """
+    del window_titles  # titles are not a signal; callers may still pass them
+    slices, rows, _names = _load_stores(_store_list(directory, directories))
     if not rows:
         return None
     accounts = _known_accounts(slices, rows)
     known = {row["agent_id"] for row in rows}
-    title_ids = set()
-    titled = agent_id_from_titles(window_titles, names)
-    if titled:
-        title_ids.add(titled)
-    account = None
-    title_accounts = {row["account"] for row in rows if row["agent_id"] in title_ids}
-    if len(title_accounts) == 1:
-        account = next(iter(title_accounts))
+    account = _freshest_account(slices, accounts)
     if account is None:
-        account = _freshest_account(slices, accounts)
+        present = {row["account"] for row in rows}
+        account = next(iter(present)) if len(present) == 1 else None
     if account is None:
-        latest = _latest_user_transcript(rows)
-        account = latest["account"] if latest is not None else rows[-1]["account"]
-    scoped = [row for row in rows if row["account"] == account] or rows
-    in_view = [row for row in scoped if row["agent_id"] in title_ids]
-    if len(in_view) == 1:
-        return in_view[0]
+        return None
+    scoped = [row for row in rows if row["account"] == account]
     hits = [hit for hit in _selection_hits(slices, accounts, known) if hit[2] in (None, account)]
-    if hits:
-        hits.sort()
-        _stamp, agent_id, hit_account = hits[-1]
-        chosen = _row_for(scoped, hit_account if hit_account == account else account, agent_id)
+    for key, path in slices:
+        match = ROSTER_SLICE.match(key)
+        if not match or match.group(1) != account:
+            continue
+        picked = _roster_selected_id([(key, path)], account, known)
+        if picked:
+            hits.append((_mtime(path), picked, account))
+    hits.sort()
+    selection_mtime = hits[-1][0] if hits else None
+    selection_id = hits[-1][1] if hits else None
+    opened = _focused_opens(scoped)
+    if len(opened) == 1 and (selection_mtime is None or opened[0]["stamp"] > selection_mtime + 0.5):
+        return opened[0]
+    if selection_id:
+        chosen = _row_for(scoped, account, selection_id)
         if chosen is not None:
             return chosen
     selected = _roster_selected_id(slices, account, known)
     chosen = _row_for(scoped, account, selected) if selected else None
     if chosen is not None:
         return chosen
-    latest = _latest_user_transcript(scoped)
-    if latest is not None:
-        return latest
-    scoped.sort(key=lambda row: row["stamp"])
-    return scoped[-1]
+    if len(scoped) == 1:
+        return scoped[0]
+    return None
+
+
+def latest_replay(lines):
+    """The reply Back plays for the chat that is open. None when that chat is unknown."""
+    if not lines:
+        return None
+    return lines[-1]
 
 
 def reply_snapshot(directory, window_titles=None, directories=None):
@@ -755,8 +843,8 @@ def reply_snapshot(directory, window_titles=None, directories=None):
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
-    window_titles are the live Grok Bot window titles. Every call re-reads
-    the stores, including after a bot switch or an account switch.
+    window_titles are ignored. Every call re-reads the stores. None for the
+    active file means the open chat is not known, so nothing should be spoken.
     """
     folders = _store_list(directory, directories)
     names = {}
@@ -766,7 +854,7 @@ def reply_snapshot(directory, window_titles=None, directories=None):
     if transcript is None:
         return [], sorted(names.values(), key=len, reverse=True), [], None
     agent_id = transcript["agent_id"]
-    bot = names.get(agent_id) or "Bot"
+    bot = plain_label(names.get(agent_id) or "") or "Bot"
     lines = []
     keylists = []
     entries = list(transcript["entries"])

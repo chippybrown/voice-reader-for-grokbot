@@ -223,10 +223,14 @@ def piper_job(text, token, wait):
         if token == speak_state["token"]:
             speak_state["making"] = False
 
-def say(text, wait=False, bot=None):
+_auto_spoken = set()
+
+def say(text, wait=False, bot=None, replay=False):
+    if text and not grok_store.allow_auto_speech(_auto_spoken, text, replay=replay):
+        return
     apply_bot_voice(bot)
     if text:
-        log("speak [%s] %s" % (speak_state.get("label", "?"), text[:60].replace("\n", " ")))
+        log("speak [%s] [%s] %s" % (bot or "?", speak_state.get("label", "?"), text[:60].replace("\n", " ")))
     stop_all()
     if not text:
         return
@@ -795,7 +799,7 @@ def open_tuner():
         win.destroy()
         tuner["win"] = None
         open_tuner()
-    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.")), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
+    for txt, cmd in (("\u25B6 Test", lambda: say("This is how I sound now.", replay=True)), ("Reset", reset), ("Done", lambda: (hide_tip(), win.destroy(), tuner.update(win=None)))):
         tk.Button(bar2, text=txt, command=cmd, bg=PANEL, fg=FG, activebackground="#3a4256", activeforeground=FG,
                   relief="flat", bd=0, padx=10, pady=3, font=("Segoe UI", 9)).pack(side="left", padx=4)
     win.update_idletasks()
@@ -909,11 +913,38 @@ def tick():
         flags["pause"] = False
         state["paused"] = False
         say("")
+    def use_open_chat():
+        """Point history at the chat on screen. Empty history means we are not sure."""
+        cur, keys, active = chat_snapshot()
+        if active is None and not cur:
+            state["history"] = []
+            state["file_key"] = None
+            state["pos"] = None
+            state["queue"].clear()
+            state["prev_cur"] = []
+            return False
+        if active is not None and active != state.get("file_key"):
+            grok_store.mark_seen(state["seen"], keys)
+            state["history"] = list(cur)
+            state["file_key"] = active
+            state["prev_cur"] = list(cur)
+            state["queue"].clear()
+            state["pos"] = None
+            return True
+        if active is None:
+            state["history"] = list(cur)
+            state["file_key"] = None
+            state["pos"] = None
+            return bool(cur)
+        return True
+
     manual = None
     if flags["play"]:
         flags["play"] = False
         resuming = state["paused"]
-        if state["stopped"]:     # back to watching; anything already on screen is skipped
+        if not resuming and not use_open_chat():
+            say("")
+        elif state["stopped"]:     # back to watching; anything already on screen is skipped
             state["stopped"] = False
             state["history"] = absorb_current()
         history = state["history"]
@@ -923,18 +954,27 @@ def tick():
                 manual = shown
     if flags["back"]:
         flags["back"] = False
-        history = state["history"]
-        if history:
-            state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
-            state["queue"].clear()
-            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+        # Re-read before speaking. A switch replaces history with that bot's
+        # lines, and the first Back plays the latest one, even if it arrived
+        # before the switch. An unknown chat stays silent.
+        if not use_open_chat():
+            say("")
+        else:
+            history = state["history"]
+            if history:
+                state["pos"] = len(history) - 1 if state["pos"] is None else max(0, state["pos"] - 1)
+                state["queue"].clear()
+                say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]), replay=True)
+            else:
+                say("")
     if flags["skip"]:   # Next
         flags["skip"] = False
+        use_open_chat()
         history = state["history"]
         if state["pos"] is not None and state["pos"] < len(history) - 1:
             state["pos"] += 1          # step forward through history
             state["queue"].clear()
-            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]))
+            say(announce(history[state["pos"]]), bot=bot_of(history[state["pos"]]), replay=True)
         else:
             # stop the current reply now and go back to watching for a new one
             state["queue"].clear()
@@ -948,13 +988,19 @@ def tick():
             resume_audio()      # carry on from that spot, then keep watching
             absorb_current()    # skip what came in while paused
     if manual:
-        say(announce(manual), bot=bot_of(manual))
+        say(announce(manual), bot=bot_of(manual), replay=True)
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
             cur, keys, active = chat_snapshot()
             seen = state["seen"]
-            if active is not None:
+            if active is None and not cur:
+                state["history"] = []
+                state["file_key"] = None
+                state["pos"] = None
+                state["queue"].clear()
+                state["prev_cur"] = []
+            elif active is not None:
                 # Linux files: a new or rewritten chat is a baseline, like Stop then Play.
                 # Only ids that show up on a later look are read. Position is ignored.
                 if active != state.get("file_key"):
@@ -1043,6 +1089,12 @@ def quiet_update_check():
     path = os.path.join(platform.config_dir(), "update-check.json")
     now = time.time()
     action, note = updates.launch_note(VERSION, updates.read_state(path), now)
+    if action == "clear":
+        try:
+            updates.write_state(path, now, {"latest": VERSION, "available": False})
+        except Exception:
+            pass
+        return
     if action == "skip":
         if note:
             root.after(0, lambda: update_note.update(text=note))
@@ -1073,6 +1125,10 @@ if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
     root.update()
     root.destroy()
 else:
+    try:
+        updates.remove_old_updater(platform.config_dir())
+    except Exception:
+        pass
     threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
     threading.Thread(target=quiet_update_check, name="update-check", daemon=True).start()
     root.after(200, tick)

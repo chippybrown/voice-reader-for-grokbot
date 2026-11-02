@@ -4,14 +4,14 @@
 
 ### Windows
 
-Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and double-click it. There is no installer, and it does not need an administrator password. Close the old copy first.
+Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and double-click it. There is no installer, and it does not need an administrator password. Close the old copy first. The first start copies the program into `%LOCALAPPDATA%\Grokbot Voice`. Later starts open that copy, so Windows does not unpack the whole program on every launch.
 
 Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
 
 If a window titled `find` keeps coming back from the old 1.3.1 updater, paste this into PowerShell. It closes the app and that updater, deletes the stuck files, downloads the latest program, and starts it.
 
 ```powershell
-Stop-Process -Name 'Grokbot Voice','Grokbot.Voice' -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like '*update-run.cmd*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -Force -ErrorAction SilentlyContinue "$env:APPDATA\Grok Voice\update-run.cmd", "$env:APPDATA\Grok Voice\GrokbotVoice-update.exe"; New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\Grokbot Voice" | Out-Null; Invoke-WebRequest -Uri 'https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe' -OutFile "$env:LOCALAPPDATA\Grokbot Voice\Grokbot Voice.exe"; Start-Process "$env:LOCALAPPDATA\Grokbot Voice\Grokbot Voice.exe"
+Stop-Process -Name 'Grokbot Voice','Grokbot.Voice' -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like '*update-run.cmd*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -Force -ErrorAction SilentlyContinue "$env:APPDATA\Grok Voice\update-run.cmd", "$env:APPDATA\Grok Voice\GrokbotVoice-update.exe"; $dir = "$env:LOCALAPPDATA\Grokbot Voice"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $zip = Join-Path $env:TEMP 'Grokbot-Voice-Windows.zip'; Invoke-WebRequest -Uri 'https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot-Voice-Windows.zip' -OutFile $zip; Expand-Archive -Path $zip -DestinationPath $dir -Force; Start-Process "$dir\Grokbot Voice.exe"
 ```
 
 ### Linux Mint
@@ -109,7 +109,7 @@ Your choices are stored under `%APPDATA%` (usually `C:\Users\YourName\AppData\Ro
 
 On Linux the same settings live in `~/.config/grokbot-voice/` (voice choice, speed and pitch, per-bot voices, Piper models, and the optional chief-of-staff name). The xAI key is in the login keyring, not in that folder. See [Linux Mint](#linux-mint).
 
-The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.2**.
+The bar and Settings show the version from `version.py`. This build is **Grokbot Voice v1.3.3**.
 
 ## Build from source
 
@@ -117,7 +117,7 @@ On Windows, with Python 3.12:
 
 ```bat
 pip install -r requirements.txt
-pyinstaller --noconfirm --onefile --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates grok_voice.py
+pyinstaller --noconfirm --onedir --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates --exclude-module vosk grok_voice.py
 ```
 
 The program is written to `dist\Grokbot Voice.exe`.
