@@ -9,8 +9,17 @@ import os
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 import urllib.request
+
+# A windowed build has no console. The starter's process launch can leave
+# these as None, and then print() or Tk's own error report raises
+# AttributeError and the poll is never scheduled again.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 if sys.platform == "win32":
     import platform_win as platform
@@ -274,11 +283,15 @@ def resume_audio():
     platform.audio.resume()
 
 def is_speaking():
-    if speak_state.get("held") or platform.sapi_is_paused():
-        return True   # paused mid-reply still counts as this reply
-    if speak_state["kind"] == "sapi":
-        return platform.sapi_speaking()
-    return speak_state["making"] or platform.audio.is_active()
+    try:
+        if speak_state.get("held") or platform.sapi_is_paused():
+            return True   # paused mid-reply still counts as this reply
+        if speak_state["kind"] == "sapi":
+            return platform.sapi_speaking()
+        return speak_state["making"] or platform.audio.is_active()
+    except Exception:
+        log("watcher problem:\n" + traceback.format_exc())
+        return False
 
 flags = {"stop": False, "back": False, "skip": False, "pause": False, "quit": False, "play": False}
 
@@ -359,7 +372,11 @@ def absorb_current():
     state["prev_cur"] = list(lines)
     return lines
 
-platform.install_hotkeys(flags)
+if os.environ.get("GROKBOT_VOICE_SELFTEST") != "1":
+    try:
+        platform.install_hotkeys(flags)
+    except Exception:
+        log("hotkeys unavailable:\n" + traceback.format_exc())
 
 # ---------- toolbar (rounded, dark, draggable) ----------
 platform.hide_console()
@@ -896,18 +913,39 @@ fill_voice_menu()
 # ---------- watcher loop ----------
 # Replies already on screen at launch are history. Only a reply that appears
 # after this baseline is read aloud. Back and Next can still walk the history.
-_lines, _keys, _active = chat_snapshot()
+try:
+    _lines, _keys, _active = chat_snapshot()
+except Exception:
+    log("watcher problem:\n" + traceback.format_exc())
+    _lines, _keys, _active = [], [], None
 _seen = set()
 grok_store.mark_seen(_seen, _keys)
 try:
     # Other chats are history too. A reply that shows up later is the only new one.
     grok_store.mark_seen(_seen, platform.all_reply_keys())
 except Exception:
-    pass
+    log("watcher problem:\n" + traceback.format_exc())
 state = {"seen": _seen, "history": list(_lines), "pos": None, "queue": [], "paused": False, "stopped": False, "next": 0,
          "file_key": _active, "prev_cur": list(_lines), "explained": set()}
 
+def _report_callback(exc, val, tb):
+    """Tk's default report writes to stderr. That is None in a windowed build."""
+    log("watcher problem:\n" + "".join(traceback.format_exception(exc, val, tb)))
+
+
 def tick():
+    try:
+        _tick()
+    except Exception:
+        log("watcher problem:\n" + traceback.format_exc())
+    if not flags["quit"]:
+        try:
+            root.after(200, tick)
+        except Exception:
+            log("watcher problem:\n" + traceback.format_exc())
+
+
+def _tick():
     if flags["quit"]:
         save_window()
         say("")
@@ -1000,7 +1038,14 @@ def tick():
     if not state["paused"] and not state["stopped"] and time.time() >= state["next"]:
         state["next"] = time.time() + 1
         try:
+            if not state.get("announced"):
+                state["announced"] = True
+                log("watching")
             cur, names, keys, active, skipped = platform.watch_snapshot(state["seen"], state.get("file_key"))
+            for problem in list(grok_store._read_problems.values()):
+                if problem not in state["explained"]:
+                    state["explained"].add(problem)
+                    log("skip new reply: could not read the chat file | " + problem)
             remember_names(names)
             kept_lines = []
             kept_keys = []
@@ -1100,7 +1145,7 @@ def tick():
             message = repr(exc)
             if state.get("watch_error") != message:
                 state["watch_error"] = message
-                log("watch problem: %s" % message)
+                log("watcher problem:\n" + traceback.format_exc())
     speaking = is_speaking()
     if state["queue"] and not speaking and not state["paused"] and not state["stopped"]:
         pending = state["queue"].pop(0)
@@ -1122,7 +1167,6 @@ def tick():
         shown = new
     if status.get() != shown:
         status.set(shown)
-    root.after(200, tick)
 
 def quiet_update_check():
     """Ask GitHub at most once a day. A newer release is only a note, never an install."""
@@ -1161,7 +1205,18 @@ def quiet_update_check():
     root.after(0, show)
 
 if os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
+    root.report_callback_exception = _report_callback
     root.update_idletasks()
+    root.update()
+    # One poll, the same one the window loop would run. Stderr is missing
+    # in the windowed build; the poll must still log and return.
+    sys.stderr = None
+    sys.stdout = None
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    tick()
     root.update()
     root.destroy()
 else:
@@ -1171,5 +1226,6 @@ else:
         pass
     threading.Thread(target=download_piper_voices, name="piper-setup", daemon=True).start()
     threading.Thread(target=quiet_update_check, name="update-check", daemon=True).start()
+    root.report_callback_exception = _report_callback
     root.after(200, tick)
     root.mainloop()

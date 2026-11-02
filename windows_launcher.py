@@ -264,7 +264,16 @@ def launch_env(source=None):
 def spawn_program(exe, env=None, popen=None):
     popen = popen or subprocess.Popen
     folder = os.path.dirname(exe)
-    kwargs = {"cwd": folder, "env": launch_env(env), "close_fds": True}
+    # Valid NUL handles, not inherited nulls. A windowed child otherwise
+    # starts with sys.stdout and sys.stderr set to None.
+    kwargs = {
+        "cwd": folder,
+        "env": launch_env(env),
+        "close_fds": True,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
     if sys.platform == "win32":
         # A new process group, without DETACHED_PROCESS (that opens consoles).
         kwargs["creationflags"] = 0x00000200
