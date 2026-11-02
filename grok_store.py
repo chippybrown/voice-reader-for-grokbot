@@ -201,25 +201,54 @@ def _read_text(path):
         return handle.read()
 
 
-# path -> (mtime_ns, size, parsed json). Idle polling must not re-read unchanged chats.
+# path -> (mtime_ns, ctime_ns, size, mtime, parsed json).
+# Idle polling must not re-read unchanged chats. A failed read is not stored:
+# Grok Bot often still has the file open while it is being replaced, and
+# remembering that failure hid every later reply until the timestamp changed.
 _json_cache = {}
+_read_problems = {}
+
+
+def _stat_token(stat):
+    mtime_ns = getattr(stat, "st_mtime_ns", None) or 0
+    if not mtime_ns:
+        mtime_ns = int(float(stat.st_mtime) * 1000000000)
+    ctime_ns = getattr(stat, "st_ctime_ns", 0) or 0
+    return (mtime_ns, ctime_ns, stat.st_size, stat.st_mtime)
+
+
+def note_read_problem(path, message):
+    """Remember one read failure. Returns the log line the first time, else None."""
+    text = "%s: %s" % (os.path.basename(path), message)
+    if _read_problems.get(path) == text:
+        return None
+    _read_problems[path] = text
+    return "skip new reply: could not read the chat file | " + text
+
+
+def clear_read_problem(path):
+    _read_problems.pop(path, None)
 
 
 def _parsed_json(path):
     """Parse a blob once until its size or modification time changes."""
     try:
         stat = os.stat(path)
-    except OSError:
+    except OSError as exc:
+        note_read_problem(path, exc.__class__.__name__)
         return None
-    token = (getattr(stat, "st_mtime_ns", stat.st_mtime), getattr(stat, "st_ctime_ns", 0), stat.st_size)
+    token = _stat_token(stat)
     cached = _json_cache.get(path)
     if cached and cached[0] == token:
         return cached[1]
     try:
         parsed = json.loads(_read_text(path))
-    except (OSError, json.JSONDecodeError):
-        parsed = None
+    except (OSError, json.JSONDecodeError) as exc:
+        note_read_problem(path, exc.__class__.__name__)
+        _json_cache.pop(path, None)
+        return None
     _json_cache[path] = (token, parsed)
+    clear_read_problem(path)
     return parsed
 
 

@@ -120,6 +120,8 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(handle.read(), b"MZ-starter")
         self.assertEqual(self.calls[0][0], [os.path.join(app, "Grokbot Voice.exe")])
         self.assertEqual(self.calls[0][1]["cwd"], app)
+        self.assertIs(self.calls[0][1]["stdout"], windows_launcher.subprocess.DEVNULL)
+        self.assertIs(self.calls[0][1]["stderr"], windows_launcher.subprocess.DEVNULL)
         env = self.calls[0][1]["env"]
         self.assertNotIn("_MEIPASS2", env)
         self.assertNotIn("_MEIPASS", env)

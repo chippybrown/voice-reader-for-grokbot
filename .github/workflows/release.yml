@@ -36,6 +36,34 @@ jobs:
           python packaging/windows/make_version_file.py dist/version-info.txt
           pyinstaller --noconfirm --onedir --noconsole --name "Grokbot Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "grokbot_voice.ico;." --collect-all uiautomation --collect-all piper --collect-all onnxruntime --hidden-import comtypes.stream --hidden-import platform_win --hidden-import grok_store --hidden-import audio_util --hidden-import version --hidden-import bot_prefs --hidden-import window_layout --hidden-import piper_setup --hidden-import single_instance --hidden-import updates --hidden-import windows_launcher --exclude-module vosk grok_voice.py
           Copy-Item dist/version.txt "dist/Grokbot Voice/version.txt"
+          $savedTemp = $env:TEMP
+          $savedTmp = $env:TMP
+          $savedApp = $env:APPDATA
+          $savedLocal = $env:LOCALAPPDATA
+          $self = Join-Path $savedTemp "grokbot-voice-selftest"
+          if (Test-Path $self) { Remove-Item -Recurse -Force $self }
+          New-Item -ItemType Directory -Force -Path $self | Out-Null
+          $env:GROKBOT_VOICE_SELFTEST = "1"
+          $env:TEMP = $self
+          $env:TMP = $self
+          $env:APPDATA = Join-Path $self "roaming"
+          $env:LOCALAPPDATA = Join-Path $self "local"
+          $proc = Start-Process -FilePath "dist\Grokbot Voice\Grokbot Voice.exe" -PassThru
+          if (-not $proc.WaitForExit(90000)) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            throw "frozen self-test hung"
+          }
+          $env:TEMP = $savedTemp
+          $env:TMP = $savedTmp
+          $env:APPDATA = $savedApp
+          $env:LOCALAPPDATA = $savedLocal
+          Remove-Item Env:GROKBOT_VOICE_SELFTEST -ErrorAction SilentlyContinue
+          if ($proc.ExitCode -ne 0) { throw "frozen self-test exited $($proc.ExitCode)" }
+          $watchLog = Join-Path $self "grokbot_voice_log.txt"
+          if (-not (Select-String -Path $watchLog -Pattern "watching" -Quiet)) {
+            if (Test-Path $watchLog) { Get-Content $watchLog }
+            throw "frozen self-test did not start the watcher"
+          }
           pyinstaller --noconfirm --onefile --noconsole --name "Grokbot.Voice" --icon grokbot_voice.ico --version-file dist/version-info.txt --add-data "dist/version.txt;." --exclude-module vosk --exclude-module piper --exclude-module onnxruntime --exclude-module uiautomation --exclude-module numpy --distpath dist/launcher windows_launcher.py
           Copy-Item "dist/launcher/Grokbot.Voice.exe" "dist/Grokbot.Voice.exe" -Force
           # The real program is inside app\. The starter exe at the top is what

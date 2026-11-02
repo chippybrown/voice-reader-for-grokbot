@@ -707,6 +707,42 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(home)
 
+    def test_a_failed_chat_read_is_tried_again(self):
+        """A locked blob must not be remembered as empty, or later replies stay silent."""
+        root = tempfile.mkdtemp()
+        real = grok_store._read_text
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            path = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"r1","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"first reply"}}'
+                         ']}}')
+            grok_store._json_cache.clear()
+            grok_store._read_problems.clear()
+            self.assertIn("first reply", json.dumps(grok_store._parsed_json(path)))
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('{"schemaVersion":1,"value":{"entries":['
+                             '{"kind":"send-message","id":"r1","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"first reply"}},'
+                             '{"kind":"send-message","id":"r2","seq":2,"timestampMs":1700000001000,"message":{"type":"text","content":"just arrived"}}'
+                             ']}}')
+
+            def locked(_path):
+                raise OSError("locked")
+
+            grok_store._read_text = locked
+            self.assertIsNone(grok_store._parsed_json(path))
+            self.assertTrue(any("OSError" in text for text in grok_store._read_problems.values()))
+            self.assertIsNone(grok_store.note_read_problem(path, "OSError"))
+            grok_store._read_text = real
+            parsed = grok_store._parsed_json(path)
+            self.assertIn("just arrived", json.dumps(parsed))
+            self.assertEqual(grok_store._read_problems, {})
+        finally:
+            grok_store._read_text = real
+            grok_store._json_cache.clear()
+            grok_store._read_problems.clear()
+            shutil.rmtree(root)
+
     def test_unchanged_chat_file_is_not_read_twice(self):
         root = tempfile.mkdtemp()
         try:
