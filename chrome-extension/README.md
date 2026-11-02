@@ -81,4 +81,4 @@ npm install
 npm test
 ```
 
-URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.6`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.
+URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.6`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app, and it is not marked Latest. The desktop updater uses `/releases/latest`. Point the download button at the top of the main README at the new zip when you publish.

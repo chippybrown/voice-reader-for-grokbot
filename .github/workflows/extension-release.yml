@@ -42,8 +42,10 @@ jobs:
       - name: Publish the extension release
         uses: softprops/action-gh-release@v2
         with:
-          name: Grok Voice Reader extension v${{ steps.extver.outputs.version }}
+          name: Browser Extension ${{ steps.extver.outputs.version }} (Chrome, Edge, Brave)
           tag_name: ${{ github.ref_name }}
+          # The desktop updater reads /releases/latest. Leave this false so an
+          # extension tag does not replace the desktop app's Latest release.
           make_latest: false
           files: Grok-Voice-Reader-Extension.zip
           body: |
