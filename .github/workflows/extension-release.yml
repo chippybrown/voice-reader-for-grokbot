@@ -48,5 +48,5 @@ jobs:
           files: Grok-Voice-Reader-Extension.zip
           body: |
             Browser extension that reads a new Grok reply aloud in the open tab.
-            Unzip this file and load the folder in Chrome or Edge. The steps are in the README inside the zip.
-            This release does not include the desktop app.
+            Unzip this file and load the folder in Chrome, Edge, or Brave. The steps are in the README inside the zip.
+            This is the latest extension release. It does not include the desktop app.

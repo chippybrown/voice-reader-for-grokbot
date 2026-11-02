@@ -2,11 +2,11 @@
 
 A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.1.6**. The popup shows that number next to the title.
 
-You need Chrome or Edge, and a speech voice already installed on the computer. Chrome and Edge use the voices that come with Windows or macOS.
+You need Chrome, Edge, or Brave, and a speech voice already installed on the computer. Those browsers use the voices that come with Windows or macOS. In Edge, Jenny Online (Natural) is one of those voices.
 
 ## Download
 
-1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.5/Grok-Voice-Reader-Extension.zip). That file is the published 0.1.5 build. This folder is 0.1.6 and is not published yet.
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) from the [0.1.6 release](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.1.6).
 2. Unzip it. On Windows, right-click the zip and choose **Extract All**. On a Mac, double-click the zip.
 3. Put the unzipped folder somewhere you will not delete, such as **Documents**. The folder must contain a file named `manifest.json`.
 
@@ -28,11 +28,20 @@ Leave that folder where it is. The browser loads the extension from that place. 
 4. Choose the same unzipped folder.
 5. Pin it. Click the puzzle-piece icon (or the eye icon) on the toolbar, find **Grok Voice Reader**, and turn the pin on.
 
+## Install in Brave
+
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) and unzip it. The unzipped folder must contain `manifest.json`.
+2. Open Brave and go to `brave://extensions`.
+3. Turn on **Developer mode**.
+4. Click **Load unpacked**.
+5. Choose the unzipped folder.
+6. Refresh the Grok tab. The extension does not attach to a tab that was already open.
+
 ## First time you use it
 
 1. Open your Grok chat, such as `https://grok.com/bot/…`.
 2. Refresh that tab. The extension does not attach to a tab that was already open.
-3. Click once anywhere on the page. Chrome and Edge sometimes stay quiet until the page has been clicked.
+3. Click once anywhere on the page. Chrome, Edge, and Brave sometimes stay quiet until the page has been clicked.
 4. The toolbar icon shows **ON** when the tab is a Grok page and reading is turned on.
 5. Send a new message. When the reply stops changing for about a second and a half, it is read aloud. Replies that were already on the page stay quiet. Your own messages stay quiet. The bot’s name is not read.
 
@@ -51,8 +60,8 @@ Those choices are remembered.
 ## Update
 
 1. Download the new zip and unzip it.
-2. Replace the files inside the folder the browser is already using. Do not give the browser a second folder.
-3. Go back to `chrome://extensions` or `edge://extensions`.
+2. Replace the contents of the folder the browser is already using. Do not load a second copy.
+3. Open `chrome://extensions`, `edge://extensions`, or `brave://extensions`.
 4. Click **Reload** on Grok Voice Reader. The circular arrow is on the extension card.
 5. Refresh the Grok tab, and click the page once.
 
@@ -72,4 +81,4 @@ npm install
 npm test
 ```
 
-URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.5`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.
+URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.6`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app.
