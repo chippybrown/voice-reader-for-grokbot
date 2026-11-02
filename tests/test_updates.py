@@ -159,6 +159,10 @@ class UpdateTests(unittest.TestCase):
             flags = calls[0][1].get("creationflags") or 0
             self.assertEqual(flags & 0x00000008, 0)
             self.assertNotEqual(flags & 0x08000000, 0)
+            info = calls[0][1].get("startupinfo")
+            self.assertIsNotNone(info)
+            self.assertEqual(info.wShowWindow, 0)
+            self.assertNotEqual(info.dwFlags & 0x1, 0)
             source = updates.windows_script(3, directory + os.sep + "new.exe", directory + os.sep + "new.exe")
             self.assertIn("copied = True", source)
             self.assertNotIn("ReplaceExe(fso", source)

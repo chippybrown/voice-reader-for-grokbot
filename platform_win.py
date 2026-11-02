@@ -1,11 +1,11 @@
 # Windows pieces: SAPI, UI Automation, DPAPI, winsound, and the keyboard library.
 import os
-import subprocess
 import sys
 import time
 import wave
 
 import grok_store
+import hidden_process
 from audio_util import pitch_ratio, scale_wav_rate
 
 ASYNC, PURGE = 1, 2
@@ -276,7 +276,7 @@ def synthesize(kind, ref, text, speed, pitch, dest):
     if binary:
         ratio = pitch_ratio(pitch)
         length = ratio / max(0.3, float(speed))
-        subprocess.run(
+        hidden_process.run(
             [binary, "--model", grok_store.extended_path(ref),
              "--output_file", grok_store.extended_path(dest), "--length_scale", "%.4f" % length],
             input=text.encode("utf-8"),

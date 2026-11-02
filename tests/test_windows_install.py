@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 
+import hidden_process
 import updates
 import windows_launcher
 
@@ -67,18 +68,18 @@ class InstallTests(unittest.TestCase):
         self.argv = sys.argv[:]
         self.had_meipass = hasattr(sys, "_MEIPASS")
         self.meipass = getattr(sys, "_MEIPASS", None)
-        self.popen = windows_launcher.subprocess.Popen
+        self.popen = hidden_process.popen
         self.calls = []
 
         def popen(args, **kwargs):
             self.calls.append((args, kwargs))
             return None
 
-        windows_launcher.subprocess.Popen = popen
+        hidden_process.popen = popen
 
     def tearDown(self):
         sys.argv = self.argv
-        windows_launcher.subprocess.Popen = self.popen
+        hidden_process.popen = self.popen
         if self.had_meipass:
             sys._MEIPASS = self.meipass
         elif hasattr(sys, "_MEIPASS"):

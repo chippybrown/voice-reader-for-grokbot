@@ -14,6 +14,8 @@ import time
 import zipfile
 import urllib.request
 
+import hidden_process
+
 ZIP_NAME = "Grokbot-Voice-Windows.zip"
 ZIP_URL = "https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/" + ZIP_NAME
 EXE_NAME = "Grokbot Voice.exe"
@@ -262,7 +264,7 @@ def launch_env(source=None):
 
 
 def spawn_program(exe, env=None, popen=None):
-    popen = popen or subprocess.Popen
+    launch = popen or hidden_process.popen
     folder = os.path.dirname(exe)
     # Valid NUL handles, not inherited nulls. A windowed child otherwise
     # starts with sys.stdout and sys.stderr set to None.
@@ -275,9 +277,10 @@ def spawn_program(exe, env=None, popen=None):
         "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        # A new process group, without DETACHED_PROCESS (that opens consoles).
+        # A new process group. The helper adds CREATE_NO_WINDOW and SW_HIDE.
+        # DETACHED_PROCESS is not used: it lets each console tool open a window.
         kwargs["creationflags"] = 0x00000200
-    return popen([exe], **kwargs)
+    return launch([exe], **kwargs)
 
 
 def log_line(folder, message):

@@ -55,7 +55,9 @@ def _another_launch():
         pass
 
 _instance = single_instance.InstanceLock(platform.config_dir())
-if os.environ.get("GROKBOT_VOICE_SELFTEST") != "1" and not _instance.claim(_another_launch):
+_SELFTEST = os.environ.get("GROKBOT_VOICE_SELFTEST") == "1"
+_SAYTEST = os.environ.get("GROKBOT_VOICE_SAYTEST") == "1"
+if not _SELFTEST and not _SAYTEST and not _instance.claim(_another_launch):
     sys.exit(0)
 
 SAVED = platform.saved_voice_path()
@@ -372,7 +374,7 @@ def absorb_current():
     state["prev_cur"] = list(lines)
     return lines
 
-if os.environ.get("GROKBOT_VOICE_SELFTEST") != "1":
+if not _SELFTEST and not _SAYTEST:
     try:
         platform.install_hotkeys(flags)
     except Exception:
@@ -1227,7 +1229,14 @@ if os.environ.get("GROKBOT_VOICE_WATCHTEST") == "1":
     root.after(watch_seconds * 1000, root.destroy)
     root.after(200, tick)
     root.mainloop()
-elif os.environ.get("GROKBOT_VOICE_SELFTEST") == "1":
+elif _SAYTEST:
+    root.report_callback_exception = _report_callback
+    root.update_idletasks()
+    root.update()
+    say("piper says hello", wait=True, replay=True)
+    root.update()
+    root.destroy()
+elif _SELFTEST:
     root.report_callback_exception = _report_callback
     root.update_idletasks()
     root.update()
