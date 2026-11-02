@@ -1,17 +1,16 @@
 # Grokbot Voice
 
-## Browser extension (recommended)
+<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip"><img alt="Download Browser Extension (Chrome, Edge, Brave)" src="https://img.shields.io/badge/Download_Browser_Extension_(Chrome%2C_Edge%2C_Brave)-0.1.6-2ea44f?style=for-the-badge"></a>
 
-Use the browser extension if you read Grok in Chrome, Edge, or Brave, including a Grok Bot chat at grok.com/bot. It reads each new reply aloud in that tab.
+The browser extension reads each new Grok reply aloud in Chrome, Edge, or Brave, including a chat at grok.com/bot. This button downloads [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) from [Browser Extension 0.1.6](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.1.6). GitHub’s `/releases/latest` address stays on the desktop app, because the desktop updater uses it. When a newer extension is published, this button is updated to that zip.
 
-The latest extension release is [Grok Voice Reader extension v0.1.6](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.1.6). Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) and unzip it into a folder you will keep, such as Documents. The folder must contain `manifest.json`.
-
-1. Chrome: open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose that folder.
-2. Edge: open `edge://extensions` and do the same.
-3. Brave: open `brave://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose that folder.
-4. Refresh the Grok tab, then click the page once.
+1. Unzip the download into a folder you will keep, such as Documents. The folder must contain `manifest.json`.
+2. Chrome: open `chrome://extensions`. Edge: open `edge://extensions`. Brave: open `brave://extensions`. Turn on **Developer mode**, click **Load unpacked**, and choose that folder.
+3. Refresh the Grok tab, then click the page once.
 
 To update, replace the contents of that folder with the new zip, then click **Reload** on the extension. Pin it, pick a voice, and set the speed from the icon. The full steps are in [chrome-extension/README.md](chrome-extension/README.md).
+
+<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/v1.4.0"><img alt="Desktop app (Windows/Linux)" src="https://img.shields.io/badge/Desktop_app_(Windows%2FLinux)-v1.4.0-555555"></a>
 
 The desktop app below is an alternative for the Grok Bot desktop app on Windows and Linux Mint.
 
