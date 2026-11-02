@@ -31,6 +31,7 @@
     var baselineText = new Map();
     var baselineSpeech = new Set();
     var spoken = new Set();
+    var spokenStable = new Set();
     var spokenKey = "";
     var spokenRaw = "";
     var lastSpoken = "";
@@ -51,24 +52,37 @@
       var speech = String(pending.speech || "").trim();
       var raw = pending.raw || "";
       var key = pending.key;
+      var id = stableKey(pending);
       pending = null;
-      if (!speech || spoken.has(speech)) return;
+      if (!speech || !id || spokenStable.has(id)) return;
       spoken.add(speech);
+      spokenStable.add(id);
       spokenKey = key;
       spokenRaw = raw;
       lastSpoken = speech;
       onSpeak(speech);
     }
 
-    // A reply that already went out, including one that kept growing after
-    // the first quiet gap, is not spoken again. Replay does not use this.
+    // The same bubble with the same words is never spoken again. A later
+    // change to that bubble is a different key. Replay does not use this.
     function alreadyCovered(message) {
-      var speech = String(message.speech || "").trim();
-      if (!speech) return true;
-      if (spoken.has(speech)) return true;
-      // The same bubble already read, and the words have not changed.
-      if (spokenKey && message.key === spokenKey && speech === lastSpoken) return true;
-      return false;
+      var id = stableKey(message);
+      if (!id) return true;
+      return spokenStable.has(id);
+    }
+
+    function stableKey(message) {
+      var speech = String(message.speech || message.raw || "").replace(/\s+/g, " ").trim();
+      if (!speech) return "";
+      return String(message.key) + ":" + textHash(speech);
+    }
+
+    function textHash(text) {
+      var hash = 5381;
+      for (var i = 0; i < text.length; i++) {
+        hash = ((hash * 33) ^ text.charCodeAt(i)) >>> 0;
+      }
+      return hash.toString(16);
     }
 
     function restartTimer() {
@@ -144,7 +158,7 @@
         var speech = String(message.speech || "").trim();
         var raw = String(message.raw || "").replace(/\s+/g, " ").trim();
         if (!speech) return "empty";
-        if (spoken.has(speech)) return "already-spoken";
+        if (spokenStable.has(stableKey(message))) return "already-spoken";
         if (pending && !sameStream(pending, message)) commit();
         if (pending && sameStream(pending, message)) {
           if (pending.raw === raw) return "waiting";

@@ -15,6 +15,9 @@
   var debugEl = null;
   var DEBUG_CLASS = "grok-voice-debug-target";
   var queuedSpeech = "";
+  var unlockArmed = false;
+  var cachedVoice = null;
+  var cachedVoiceURI = null;
 
   var session = GV.createSession({
     settleMs: GV.SETTLE_MS,
@@ -52,63 +55,93 @@
     return null;
   }
 
-  function pickVoice(synth) {
-    if (!voiceURI || !synth.getVoices) return null;
+  // Pick the saved voice once, after the browser has loaded its voice list.
+  // Later voiceschanged events must not swap in a different voice.
+  function rememberVoice() {
+    if (cachedVoice && (!voiceURI || cachedVoice.voiceURI === voiceURI)) return;
+    var synth = getSynth();
+    if (!synth || typeof synth.getVoices !== "function") return;
     var voices = synth.getVoices() || [];
-    for (var i = 0; i < voices.length; i++) {
-      if (voices[i].voiceURI === voiceURI) return voices[i];
+    if (!voices.length) return;
+    if (!voiceURI) {
+      cachedVoice = voices[0];
+      cachedVoiceURI = cachedVoice.voiceURI || "";
+      return;
     }
-    return null;
+    for (var i = 0; i < voices.length; i++) {
+      if (voices[i].voiceURI === voiceURI) {
+        cachedVoice = voices[i];
+        cachedVoiceURI = voiceURI;
+        return;
+      }
+    }
   }
 
-  // Chrome drops speechSynthesis.speak until the page has a click or keypress.
-  // Keep the words and try again on the next gesture. The call has to happen
-  // inside that event, so the listeners below invoke speak directly.
+  function voiceForUtterance() {
+    if (!cachedVoice || (voiceURI && cachedVoice.voiceURI !== voiceURI)) rememberVoice();
+    if (voiceURI && (!cachedVoice || cachedVoice.voiceURI !== voiceURI)) return null;
+    return cachedVoice;
+  }
+
   function speakAloud(text) {
     if (!text) return;
-    queuedSpeech = text;
     lastDetect.reason = "spoke";
     lastDetect.snippet = snippetOf(text);
     logResolve();
-    attemptSpeak(text);
+    attemptSpeak(text, true);
   }
 
-  function attemptSpeak(text) {
+  function attemptSpeak(text, allowCancel) {
     var synth = getSynth();
     var Utterance = root.SpeechSynthesisUtterance;
     if (!synth || !Utterance || !text) return;
     try {
-      if (synth.speaking || synth.pending) synth.cancel();
+      if (allowCancel && (synth.speaking || synth.pending)) synth.cancel();
       var utterance = new Utterance(text);
       utterance.rate = GV.clampRate(rate);
-      var voice = pickVoice(synth);
+      var voice = voiceForUtterance();
       if (voice) {
         utterance.voice = voice;
         if (voice.lang) utterance.lang = voice.lang;
       }
-      utterance.onstart = function () {
-        if (queuedSpeech === text) queuedSpeech = "";
-      };
-      utterance.onend = function () {
-        if (queuedSpeech === text) queuedSpeech = "";
-      };
       utterance.onerror = function (event) {
-        var reason = event && event.error;
-        if (reason === "not-allowed") queuedSpeech = text;
+        if (event && event.error === "not-allowed") {
+          queuedSpeech = text;
+          armUnlock();
+        }
       };
       synth.speak(utterance);
     } catch (err) {
       queuedSpeech = text;
+      armUnlock();
     }
   }
 
-  function flushQueued() {
-    if (!queuedSpeech) return;
-    attemptSpeak(queuedSpeech);
+  function unlockOnce() {
+    var text = queuedSpeech;
+    queuedSpeech = "";
+    disarmUnlock();
+    if (!text) return;
+    attemptSpeak(text, false);
+  }
+
+  function armUnlock() {
+    if (unlockArmed || !queuedSpeech) return;
+    unlockArmed = true;
+    document.addEventListener("pointerdown", unlockOnce, true);
+    document.addEventListener("keydown", unlockOnce, true);
+  }
+
+  function disarmUnlock() {
+    if (!unlockArmed) return;
+    unlockArmed = false;
+    document.removeEventListener("pointerdown", unlockOnce, true);
+    document.removeEventListener("keydown", unlockOnce, true);
   }
 
   function stopSpeaking() {
     queuedSpeech = "";
+    disarmUnlock();
     session.stop();
     var synth = getSynth();
     if (synth && synth.cancel) {
@@ -285,11 +318,24 @@
     };
   }
 
+  function mutationsAreNoise(records) {
+    if (!records || !records.length || typeof GV.ignoreMutation !== "function") return false;
+    for (var i = 0; i < records.length; i++) {
+      if (!GV.ignoreMutation(records[i])) return false;
+    }
+    return true;
+  }
+
   function startObserver() {
     if (observer) return;
-    observer = new MutationObserver(function () {
-      bindObserver();
-      scheduleScan();
+    observer = new MutationObserver(function (records) {
+      try {
+        bindObserver();
+        if (mutationsAreNoise(records)) return;
+        scheduleScan();
+      } catch (err) {
+        scheduleScan();
+      }
     });
     bindObserver();
   }
@@ -338,7 +384,12 @@
 
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== "local") return;
-    if (changes.voiceURI) voiceURI = changes.voiceURI.newValue || "";
+    if (changes.voiceURI) {
+      voiceURI = changes.voiceURI.newValue || "";
+      cachedVoice = null;
+      cachedVoiceURI = null;
+      rememberVoice();
+    }
     if (changes.rate) rate = GV.clampRate(changes.rate.newValue);
     if (changes.debug) {
       debug = changes.debug.newValue === true;
@@ -350,18 +401,22 @@
 
   function boot() {
     startObserver();
+    var synth = getSynth();
+    if (synth && synth.addEventListener) {
+      synth.addEventListener("voiceschanged", rememberVoice);
+    }
     chrome.storage.local.get(GV.DEFAULTS, function (stored) {
       voiceURI = stored.voiceURI || "";
       rate = GV.clampRate(stored.rate);
       debug = stored.debug === true;
+      cachedVoice = null;
+      cachedVoiceURI = null;
+      rememberVoice();
       applyEnabled(stored.enabled !== false);
       scheduleScan();
     });
     setInterval(scheduleScan, 1000);
   }
-
-  document.addEventListener("pointerdown", flushQueued, true);
-  document.addEventListener("keydown", flushQueued, true);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot, { once: true });

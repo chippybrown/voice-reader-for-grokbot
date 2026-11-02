@@ -369,6 +369,310 @@ test("shadow root and iframe chats are both detected", { timeout: 45000 }, async
   }
 });
 
+const typingPage = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Typing</title>
+<style>
+  #thread { overflow-y: auto; height: 420px; display: flex; flex-direction: column; gap: 12px; }
+  .turn { display: flex; }
+  .pad { color: #fff; border-radius: 16px; padding: 10px 14px; max-width: 75%; }
+  .composer { padding: 12px; }
+  textarea, [contenteditable] { width: 100%; box-sizing: border-box; }
+</style></head>
+<body>
+  <div id="thread">
+    <div class="turn" style="justify-content:flex-start">
+      <div class="pad" style="background:#2b2e36">
+        <p dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space:pre-wrap">Old reply stays quiet.</p>
+      </div>
+    </div>
+    <div class="turn" style="justify-content:flex-end">
+      <div class="pad" style="background:rgb(110, 64, 200)">
+        <p id="user-body" dir="auto" class="break-words streamdown-first-block:mt-0" style="white-space:pre-wrap">Already asked.</p>
+      </div>
+    </div>
+  </div>
+  <form class="composer">
+    <textarea id="composer" placeholder="Message"></textarea>
+    <div id="draft" contenteditable="true" role="textbox"><p dir="auto" class="break-words streamdown-first-block:mt-0">draft</p></div>
+  </form>
+  <script>
+    window.addAssistant = function (text) {
+      var turn = document.createElement("div");
+      turn.className = "turn";
+      turn.style.justifyContent = "flex-start";
+      var pad = document.createElement("div");
+      pad.className = "pad";
+      pad.style.background = "#2b2e36";
+      var paragraph = document.createElement("p");
+      paragraph.dir = "auto";
+      paragraph.className = "break-words streamdown-first-block:mt-0";
+      paragraph.style.whiteSpace = "pre-wrap";
+      paragraph.textContent = text;
+      pad.appendChild(paragraph);
+      turn.appendChild(pad);
+      document.getElementById("thread").appendChild(turn);
+    };
+  </script>
+</body></html>`;
+
+async function typeInComposer(page) {
+  await page.evaluate(() => {
+    var box = document.getElementById("composer");
+    var draft = document.getElementById("draft");
+    var user = document.getElementById("user-body");
+    box.focus();
+    for (var i = 0; i < 20; i++) {
+      box.value = "hello " + i;
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+      box.dispatchEvent(new InputEvent("input", { bubbles: true, data: "a" }));
+      draft.textContent = "draft " + i;
+      draft.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    }
+    user.textContent = "A typed user bubble must stay quiet.";
+  });
+}
+
+test("keydowns and composer edits do not speak", { timeout: 60000 }, async () => {
+  const { browser } = await launch();
+  try {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (request.url().startsWith("https://grok.com/")) {
+        request.respond({
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: typingPage
+        }).catch(() => {});
+        return;
+      }
+      request.continue().catch(() => {});
+    });
+    await page.goto("https://grok.com/typing", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("html[data-grok-voice-armed='1']", { timeout: 10000 });
+    const world = await contentWorld(page);
+    await world.evaluate(`(() => {
+      const spoken = [];
+      let cancels = 0;
+      let speaking = false;
+      globalThis.__grokVoiceSpoken = spoken;
+      globalThis.__grokVoiceCancels = () => cancels;
+      function record(utterance) {
+        spoken.push(String(utterance && utterance.text || ""));
+        speaking = true;
+      }
+      function cancel() {
+        cancels += 1;
+        speaking = false;
+      }
+      const proto = globalThis.SpeechSynthesis && globalThis.SpeechSynthesis.prototype;
+      if (proto) {
+        proto.speak = function (utterance) { record(utterance); };
+        proto.cancel = function () { cancel(); };
+      }
+      const synth = globalThis.speechSynthesis;
+      if (synth) {
+        try { synth.speak = function (utterance) { record(utterance); }; } catch (err) {}
+        try { synth.cancel = function () { cancel(); }; } catch (err) {}
+        try {
+          Object.defineProperty(synth, "speaking", { configurable: true, get: function () { return speaking; } });
+          Object.defineProperty(synth, "pending", { configurable: true, get: function () { return false; } });
+        } catch (err) {}
+      }
+      return true;
+    })()`);
+
+    await typeInComposer(page);
+    await delay(2200);
+    assert.deepEqual(await spokenTexts(world), []);
+    assert.equal(await world.evaluate("globalThis.__grokVoiceCancels()"), 0);
+
+    await page.evaluate(() => window.addAssistant("Alpha reply should be spoken once."));
+    const spoken = await waitForSpoken(world);
+    assert.deepEqual(spoken, ["Alpha reply should be spoken once."]);
+    const cancelsAfterSpeak = await world.evaluate("globalThis.__grokVoiceCancels()");
+
+    await typeInComposer(page);
+    await delay(2200);
+    assert.deepEqual(await spokenTexts(world), ["Alpha reply should be spoken once."]);
+    assert.equal(await world.evaluate("globalThis.__grokVoiceCancels()"), cancelsAfterSpeak);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+test("a blocked utterance is spoken once on the next key", { timeout: 60000 }, async () => {
+  const { browser } = await launch();
+  try {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (request.url().startsWith("https://grok.com/")) {
+        request.respond({
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: typingPage
+        }).catch(() => {});
+        return;
+      }
+      request.continue().catch(() => {});
+    });
+    await page.goto("https://grok.com/typing-unlock", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("html[data-grok-voice-armed='1']", { timeout: 10000 });
+    const world = await contentWorld(page);
+    await world.evaluate(`(() => {
+      const spoken = [];
+      let calls = 0;
+      globalThis.__grokVoiceSpoken = spoken;
+      globalThis.__grokVoiceSpeakCalls = () => calls;
+      function speak(utterance) {
+        calls += 1;
+        if (calls === 1) {
+          if (utterance && typeof utterance.onerror === "function") utterance.onerror({ error: "not-allowed" });
+          return;
+        }
+        spoken.push(String(utterance && utterance.text || ""));
+      }
+      const proto = globalThis.SpeechSynthesis && globalThis.SpeechSynthesis.prototype;
+      if (proto) proto.speak = speak;
+      const synth = globalThis.speechSynthesis;
+      if (synth) {
+        try { synth.speak = speak; } catch (err) {}
+      }
+      return true;
+    })()`);
+
+    await page.evaluate(() => window.addAssistant("Unlock this reply one time."));
+    let calls = 0;
+    for (let i = 0; i < 30 && calls < 1; i++) {
+      calls = await world.evaluate("globalThis.__grokVoiceSpeakCalls()");
+      if (calls < 1) await delay(150);
+    }
+    assert.equal(calls, 1);
+    assert.deepEqual(await spokenTexts(world), []);
+
+    await typeInComposer(page);
+    await delay(400);
+    assert.deepEqual(await spokenTexts(world), ["Unlock this reply one time."]);
+    assert.equal(await world.evaluate("globalThis.__grokVoiceSpeakCalls()"), 2);
+
+    await typeInComposer(page);
+    await delay(500);
+    assert.deepEqual(await spokenTexts(world), ["Unlock this reply one time."]);
+    assert.equal(await world.evaluate("globalThis.__grokVoiceSpeakCalls()"), 2);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
+test("the chosen voice stays the same across replies", { timeout: 60000 }, async () => {
+  const { browser } = await launch();
+  try {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (request.url().startsWith("https://grok.com/")) {
+        request.respond({
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          body: typingPage
+        }).catch(() => {});
+        return;
+      }
+      request.continue().catch(() => {});
+    });
+    await page.goto("https://grok.com/typing-voice", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("html[data-grok-voice-armed='1']", { timeout: 10000 });
+    const world = await contentWorld(page);
+    await world.evaluate(`(() => {
+      const used = [];
+      globalThis.__grokVoiceUsed = used;
+      globalThis.__flipVoices = false;
+      globalThis.__voiceLists = 0;
+      const OriginalUtterance = globalThis.SpeechSynthesisUtterance;
+      function Utterance(text) {
+        const utterance = new OriginalUtterance(text);
+        let voice = null;
+        Object.defineProperty(utterance, "voice", {
+          configurable: true,
+          enumerable: true,
+          get: function () { return voice; },
+          set: function (value) { voice = value; }
+        });
+        return utterance;
+      }
+      Utterance.prototype = OriginalUtterance.prototype;
+      globalThis.SpeechSynthesisUtterance = Utterance;
+      function list() {
+        globalThis.__voiceLists += 1;
+        if (globalThis.__flipVoices) {
+          return [
+            { voiceURI: "voice-b", lang: "en-GB", name: "B" },
+            { voiceURI: "voice-c", lang: "en-US", name: "C" }
+          ];
+        }
+        return [
+          { voiceURI: "voice-b", lang: "en-GB", name: "B" },
+          { voiceURI: "voice-a", lang: "en-US", name: "A" }
+        ];
+      }
+      function record(utterance) {
+        used.push({
+          text: String(utterance && utterance.text || ""),
+          voice: utterance && utterance.voice ? utterance.voice.voiceURI : ""
+        });
+      }
+      const proto = globalThis.SpeechSynthesis && globalThis.SpeechSynthesis.prototype;
+      if (proto) {
+        proto.getVoices = list;
+        proto.speak = function (utterance) { record(utterance); };
+        proto.cancel = function () {};
+      }
+      const synth = globalThis.speechSynthesis;
+      if (synth) {
+        try { synth.getVoices = list; } catch (err) {}
+        try { synth.speak = function (utterance) { record(utterance); }; } catch (err) {}
+        try { synth.cancel = function () {}; } catch (err) {}
+        try { synth.dispatchEvent(new Event("voiceschanged")); } catch (err) {}
+      }
+      return true;
+    })()`);
+    await world.evaluate("new Promise((resolve) => chrome.storage.local.set({ voiceURI: 'voice-a' }, resolve))");
+    let lists = 0;
+    for (let i = 0; i < 20 && lists < 1; i++) {
+      lists = await world.evaluate("globalThis.__voiceLists");
+      if (lists < 1) await delay(50);
+    }
+    assert.ok(lists >= 1, "voice list was not read after the saved voice was set");
+    await world.evaluate(`(() => {
+      globalThis.__flipVoices = true;
+      const synth = globalThis.speechSynthesis;
+      if (synth && synth.dispatchEvent) synth.dispatchEvent(new Event("voiceschanged"));
+      if (synth && synth.getVoices) synth.getVoices();
+      return true;
+    })()`);
+
+    await page.evaluate(() => window.addAssistant("First voiced reply stays on voice a."));
+    let used = [];
+    for (let i = 0; i < 30 && used.length < 1; i++) {
+      used = (await world.evaluate("globalThis.__grokVoiceUsed")) || [];
+      if (used.length < 1) await delay(150);
+    }
+    await page.evaluate(() => window.addAssistant("Second voiced reply stays on voice a."));
+    for (let i = 0; i < 30 && used.length < 2; i++) {
+      used = (await world.evaluate("globalThis.__grokVoiceUsed")) || [];
+      if (used.length < 2) await delay(150);
+    }
+    assert.equal(used.length, 2);
+    assert.equal(used[0].voice, "voice-a");
+    assert.equal(used[1].voice, "voice-a");
+    assert.equal(used[0].text.includes("First voiced reply"), true);
+    assert.equal(used[1].text.includes("Second voiced reply"), true);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});
+
 async function waitForBadge(worker) {
   let latest = "";
   for (let i = 0; i < 20; i++) {
