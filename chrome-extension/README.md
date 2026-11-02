@@ -49,7 +49,7 @@ Chrome ignores the path on a host permission and grants the whole site. Prefer a
 
 The content script runs in every frame of a Grok, xAI, or Cursor page, including `about:blank` and `srcdoc` frames opened by that page. It also looks inside open shadow roots. The popup lists each frame’s address and how many replies that frame found.
 
-This build is **0.1.2**. The popup shows that version beside the title.
+This build is **0.1.3**. The popup shows that version beside the title.
 
 Assistant text on grok.com is rendered by Streamdown. The reader uses only those blocks: a `p` with `dir="auto"` whose class contains `streamdown` (for example `streamdown-first-block:mt-0`), plus any list, heading, or table in that same markdown box. The bot name above the reply, the time, and the buttons are not part of that box, so they are not spoken. Several blocks in one box are one reply. A new or changed message is spoken after its text stays still for about 1.5 seconds, and only once.
 

@@ -158,11 +158,20 @@
 
   var lastLogLine = "";
 
-  function logResolve() {
+  function logResolve(report) {
+    report = report || {};
+    var detail = "";
+    var groups = report.groups || [];
+    for (var i = 0; i < groups.length; i++) {
+      detail += " group" + (i + 1) + "=" + groups[i].role + ":" + groups[i].reason
+        + ":\"" + snippetOf(groups[i].speech) + "\"";
+    }
     var line = "[GrokVoice] frame=" + location.href
       + " blocks=" + lastDetect.blocks
-      + " groups=" + lastDetect.groups
+      + " groups=" + groups.length
+      + " assistant=" + lastDetect.groups
       + " mode=" + (lastDetect.mode || "")
+      + detail
       + " chosen=\"" + lastDetect.snippet + "\""
       + " skip=" + lastDetect.reason;
     if (!debug && line === lastLogLine) return;
@@ -187,7 +196,7 @@
       rootNode.setAttribute("data-grok-voice-detected", String(replies.length));
       rootNode.setAttribute("data-grok-voice-snippet", lastDetect.snippet);
     }
-    logResolve();
+    logResolve(report);
     safeSend({
       type: "frame-report",
       href: location.href,

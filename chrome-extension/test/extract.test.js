@@ -229,3 +229,51 @@ test("fallback reads dir=auto bubbles when no streamdown class exists", { timeou
     await browser.close().catch(() => {});
   }
 });
+
+test("a flex-end chat column does not hide assistant replies", { timeout: 30000 }, async () => {
+  const browser = await puppeteer.launch({
+    executablePath: process.env.CHROME_PATH || "/usr/bin/google-chrome",
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
+  });
+  const block = "break-words last:mb-0 streamdown-first-block:mt-0";
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html><body>
+      <div id="column" class="justify-end items-end" style="display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-end;height:480px;overflow-y:auto;background:#111;">
+        <div style="display:flex;width:100%;justify-content:flex-start;">
+          <div style="background:#2b2e36;color:#fff;padding:8px;border-radius:16px;"><p dir="auto" class="${block}">First assistant in a flex-end column.</p></div>
+        </div>
+        <div style="display:flex;width:100%;justify-content:flex-end;">
+          <div style="background:rgb(110, 64, 200);color:#fff;padding:8px;border-radius:16px;margin-left:auto;"><p dir="auto" class="${block}">User purple text.</p></div>
+        </div>
+        <div style="display:flex;width:100%;justify-content:flex-start;">
+          <div style="background:#2b2e36;color:#fff;padding:8px;border-radius:16px;"><p dir="auto" class="${block}">Last assistant should be chosen.</p></div>
+        </div>
+      </div>
+    </body>`, { waitUntil: "domcontentloaded" });
+    for (const file of ["src/config.js", "src/text.js", "src/detect.js"]) {
+      await page.addScriptTag({ path: path.join(root, file) });
+    }
+    const result = await page.evaluate(() => {
+      const report = globalThis.GrokVoice.inspectAssistant(document);
+      return {
+        mode: report.mode,
+        blocks: report.blockCount,
+        groups: report.groups.map((group) => group.role + ":" + group.reason),
+        speeches: report.replies.map((reply) => reply.speech),
+        latest: report.replies.length ? report.replies[report.replies.length - 1].speech : ""
+      };
+    });
+    assert.equal(result.mode, "streamdown");
+    assert.equal(result.blocks, 3);
+    assert.equal(result.latest, "Last assistant should be chosen.");
+    assert.deepEqual(result.speeches, [
+      "First assistant in a flex-end column.",
+      "Last assistant should be chosen."
+    ]);
+    assert.equal(result.groups.some((line) => line.indexOf("user:") === 0), true);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+});

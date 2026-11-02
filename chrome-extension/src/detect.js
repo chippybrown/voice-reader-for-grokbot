@@ -263,28 +263,83 @@
     return rightGap + 16 < leftGap && box.width < frame.width * 0.92;
   }
 
-  function isUserBubble(bubble) {
-    var node = bubble;
-    var depth = 0;
-    while (node && node.nodeType === 1 && depth < 3) {
-      depth += 1;
-      if (node === node.ownerDocument.body || node === node.ownerDocument.documentElement) break;
-      // A column that stacks several replies is the chat, not a user bubble,
-      // even when it uses justify-content: flex-end to pin messages down.
-      if (depth > 1 && separatesIntoDistinctMessages(node)) break;
-      var role = attrRole(node);
-      if (role === "user") return true;
-      if (role === "assistant") return false;
-      var style = styleOf(node);
-      if (style) {
-        var justify = style.justifyContent;
-        if (justify === "flex-end" || justify === "end" || style.alignSelf === "flex-end") return true;
-        if (isPurple(style.backgroundColor)) return true;
+  function parentHasOtherMessages(parent, branch) {
+    var children = parent.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (child === branch || child.contains(branch)) continue;
+      if (isContentBlock(child)) continue;
+      if (containsStreamdownParagraph(child)) return true;
+      try {
+        if (child.querySelector && child.querySelector('p[dir="auto"]')) return true;
+      } catch (err) {
+        // Ignore a node that cannot be queried.
       }
-      if (node.parentElement && pushedToEnd(node, node.parentElement)) return true;
-      node = node.parentElement;
     }
     return false;
+  }
+
+  // The message root is the nearest ancestor that still holds only this
+  // message. Stop when the parent also holds another message.
+  function messageRoot(paragraph) {
+    var node = paragraph;
+    var doc = paragraph.ownerDocument;
+    var guard = 0;
+    while (node.parentElement && guard < 30) {
+      guard += 1;
+      var parent = node.parentElement;
+      if (parent === doc.body || parent === doc.documentElement) break;
+      if (parentHasOtherMessages(parent, node)) break;
+      node = parent;
+    }
+    return node;
+  }
+
+  function coloredBox(paragraph, root) {
+    var node = paragraph;
+    var shaded = null;
+    while (node) {
+      if (node !== paragraph && hasOwnBackground(node)) shaded = node;
+      if (node === root) break;
+      node = node.parentElement;
+    }
+    return shaded || root;
+  }
+
+  function isDarkGray(color) {
+    var c = parseRgb(color);
+    if (!c || c.a === 0) return false;
+    var max = Math.max(c.r, c.g, c.b);
+    var min = Math.min(c.r, c.g, c.b);
+    return max < 90 && max - min < 30;
+  }
+
+  // User only when THIS bubble is purple, or its own wrapper (not the chat
+  // column above it) is justify-end / margin-left auto. Anything else is assistant.
+  function classifyBubble(paragraph) {
+    var root = messageRoot(paragraph);
+    var box = coloredBox(paragraph, root);
+    var style = styleOf(box);
+    if (style && isPurple(style.backgroundColor)) {
+      return { role: "user", reason: "bubble-purple", bubble: box, root: root };
+    }
+    if (style && (style.alignSelf === "flex-end" || style.alignSelf === "end")) {
+      return { role: "user", reason: "bubble-align-end", bubble: box, root: root };
+    }
+    var wrapper = box.parentElement;
+    if (wrapper && !parentHasOtherMessages(wrapper, box)) {
+      var wrapperStyle = styleOf(wrapper);
+      if (wrapperStyle && (wrapperStyle.justifyContent === "flex-end" || wrapperStyle.justifyContent === "end")) {
+        return { role: "user", reason: "wrapper-justify-end", bubble: box, root: root };
+      }
+      if (pushedToEnd(box, wrapper)) {
+        return { role: "user", reason: "bubble-right-aligned", bubble: box, root: root };
+      }
+    }
+    if (style && isDarkGray(style.backgroundColor)) {
+      return { role: "assistant", reason: "bubble-dark-gray", bubble: box, root: root };
+    }
+    return { role: "assistant", reason: "uncertain", bubble: box, root: root };
   }
 
   function nearestBubble(paragraph) {
@@ -377,40 +432,6 @@
     }
   }
 
-  function groupParagraphs(paragraphs) {
-    var order = [];
-    var grouped = new Map();
-    var i;
-    for (i = 0; i < paragraphs.length; i++) {
-      var bubble = nearestBubble(paragraphs[i]);
-      if (!bubble || isUserBubble(bubble)) continue;
-      if (!grouped.has(bubble)) {
-        grouped.set(bubble, []);
-        order.push(bubble);
-      }
-      grouped.get(bubble).push(paragraphs[i]);
-    }
-    var replies = [];
-    for (i = 0; i < order.length; i++) {
-      var speech = GV.replySpeech(order[i]);
-      if (!speech) continue;
-      replies.push({
-        element: order[i],
-        body: order[i],
-        speech: speech,
-        raw: speech
-      });
-    }
-    replies.sort(function (a, b) {
-      if (!a.element || !b.element || a.element === b.element) return 0;
-      var pos = a.element.compareDocumentPosition(b.element);
-      if (pos & 4) return -1;
-      if (pos & 2) return 1;
-      return 0;
-    });
-    return replies;
-  }
-
   // Every matching paragraph in this frame, including open shadow roots.
   // Streamdown is preferred. If that matches nothing, p[dir=auto] bubbles are used.
   GV.inspectAssistant = function inspectAssistant(doc) {
@@ -424,9 +445,46 @@
       mode = "fallback";
       collectParagraphs(body, paragraphs, 'p[dir="auto"]');
     }
+    var seen = new Set();
+    var groups = [];
+    var replies = [];
+    var i;
+    for (i = 0; i < paragraphs.length; i++) {
+      var info = classifyBubble(paragraphs[i]);
+      var key = info.root || info.bubble;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      var speech = GV.replySpeech(key);
+      if (!speech) continue;
+      var group = {
+        role: info.role,
+        reason: info.reason,
+        speech: speech,
+        element: key,
+        body: info.bubble || key
+      };
+      groups.push(group);
+      if (info.role !== "user") {
+        replies.push({
+          element: group.element,
+          body: group.body,
+          speech: speech,
+          raw: speech,
+          reason: info.reason
+        });
+      }
+    }
+    replies.sort(function (a, b) {
+      if (!a.element || !b.element || a.element === b.element) return 0;
+      var pos = a.element.compareDocumentPosition(b.element);
+      if (pos & 4) return -1;
+      if (pos & 2) return 1;
+      return 0;
+    });
     return {
       blockCount: paragraphs.length,
-      replies: groupParagraphs(paragraphs),
+      replies: replies,
+      groups: groups,
       mode: mode
     };
   };
