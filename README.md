@@ -1,6 +1,28 @@
 # Grokbot Voice
 
-Download [Grokbot Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases) from the Releases page, put it on your desktop, and double-click to run.
+## Install or update
+
+### Windows
+
+Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and double-click it. There is no installer, and it does not need an administrator password. Close the old copy first.
+
+Windows SmartScreen may warn you. Click **More info**, then **Run anyway**.
+
+If a window titled `find` keeps coming back from the old 1.3.1 updater, paste this into PowerShell. It closes the app and that updater, deletes the stuck files, downloads the latest program, and starts it.
+
+```powershell
+Stop-Process -Name 'Grokbot Voice','Grokbot.Voice' -Force -ErrorAction SilentlyContinue; Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" | Where-Object { $_.CommandLine -like '*update-run.cmd*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -Force -ErrorAction SilentlyContinue "$env:APPDATA\Grok Voice\update-run.cmd", "$env:APPDATA\Grok Voice\GrokbotVoice-update.exe"; New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\Grokbot Voice" | Out-Null; Invoke-WebRequest -Uri 'https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe' -OutFile "$env:LOCALAPPDATA\Grokbot Voice\Grokbot Voice.exe"; Start-Process "$env:LOCALAPPDATA\Grokbot Voice\Grokbot Voice.exe"
+```
+
+### Linux Mint
+
+Paste this into a terminal. The same command installs Grokbot Voice the first time and updates it later.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chippybrown/voice-reader-for-grokbot/main/install-mint.sh | bash
+```
+
+Or download the [AppImage](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot-Voice-x86_64.AppImage). Right-click it, choose **Properties**, then **Permissions**, and turn on **Allow executing file as program**. You can also run `chmod +x Grokbot-Voice-x86_64.AppImage`. Then double-click it.
 
 A small app for people who'd rather listen than read. It runs on Windows and on Linux Mint.
 
@@ -16,7 +38,7 @@ On Linux Mint, install the Grok Bot desktop app as well. Grokbot Voice reads tha
 
 ## Install
 
-1. On the [Releases](https://github.com/chippybrown/voice-reader-for-grokbot/releases) page, download `Grokbot Voice.exe` and put it on your desktop.
+1. Download [Grokbot.Voice.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot.Voice.exe) and put it on your desktop.
 2. Double-click it. Windows SmartScreen may warn you, because the app is not code-signed yet. Click **More info**, then **Run anyway**.
 3. The toolbar starts in the lower right of the screen. Opening it again raises the window that is already running instead of starting a second copy. **Check for updates** in the gear menu compares this copy with the latest GitHub release. It says you're up to date, or that a newer version is available, and waits for **Update**. Once a day the bar can show **Update available**. It does not install by itself. Drag it anywhere you like. Drag an edge or a corner to make it wide and short, or tall and skinny. The buttons wrap, and stack in a column when the window is narrow. In Settings, **Toolbar** can be **Horizontal** or **Vertical**. Vertical stacks every button from top to bottom, which suits a screen edge or a portrait monitor. The size, the place, and that choice are remembered the next time you open it. It stays above your other windows.
 
@@ -154,7 +176,7 @@ sudo apt install python3 python3-tk python3-pip espeak-ng pulseaudio-utils gnome
 
 ### 2. Run Grokbot Voice
 
-On the [Releases](https://github.com/chippybrown/voice-reader-for-grokbot/releases) page, download **Grokbot-Voice-x86_64.AppImage**. It is attached when a version tag is built, the same way the Windows exe is. Then:
+Download the [AppImage](https://github.com/chippybrown/voice-reader-for-grokbot/releases/latest/download/Grokbot-Voice-x86_64.AppImage). It is attached to the latest release, the same way the Windows exe is. Then:
 
 ```bash
 chmod +x Grokbot-Voice-x86_64.AppImage
