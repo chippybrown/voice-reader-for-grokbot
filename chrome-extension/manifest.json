@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Grok Voice Reader",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "description": "Reads a new Grok reply aloud in the tab that is open.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
@@ -12,8 +12,23 @@
     "https://grok.x.ai/*",
     "https://*.grok.x.ai/*",
     "https://cursor.com/*",
-    "https://*.cursor.com/*"
+    "https://*.cursor.com/*",
+    "https://api.github.com/*"
   ],
+  "commands": {
+    "previous": {
+      "suggested_key": { "default": "Alt+Left" },
+      "description": "Read the previous reply"
+    },
+    "play-pause": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Play or pause"
+    },
+    "next": {
+      "suggested_key": { "default": "Alt+Right" },
+      "description": "Read the next reply"
+    }
+  },
   "background": {
     "service_worker": "src/background.js"
   },
@@ -49,6 +64,9 @@
         "src/text.js",
         "src/detect.js",
         "src/reader.js",
+        "src/playback.js",
+        "src/bots.js",
+        "src/controls.js",
         "src/content.js"
       ],
       "run_at": "document_idle",

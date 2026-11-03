@@ -1,12 +1,12 @@
 # Grok Voice Reader
 
-A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.1.6**. The popup shows that number next to the title.
+A browser add-on that reads a new Grok reply out loud. It works in the tab you have open, including a Grok Bot chat at grok.com/bot. This build is **0.2.0**. The popup shows that number next to the title.
 
 You need Chrome, Edge, or Brave, and a speech voice already installed on the computer. Those browsers use the voices that come with Windows or macOS. In Edge, Jenny Online (Natural) is one of those voices.
 
 ## Download
 
-1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) from the [0.1.6 release](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.1.6).
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.0/Grok-Voice-Reader-Extension.zip) from the [0.2.0 release](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.2.0). On Windows you can instead run [Grok-Voice-Reader-Setup.exe](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.0/Grok-Voice-Reader-Setup.exe), which copies the files to `%LOCALAPPDATA%\Grok Voice Reader\extension`. On Linux, run [Grok-Voice-Reader-x86_64.AppImage](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.0/Grok-Voice-Reader-x86_64.AppImage), which copies them to `~/.local/share/grok-voice-reader/extension`.
 2. Unzip it. On Windows, right-click the zip and choose **Extract All**. On a Mac, double-click the zip.
 3. Put the unzipped folder somewhere you will not delete, such as **Documents**. The folder must contain a file named `manifest.json`.
 
@@ -30,7 +30,7 @@ Leave that folder where it is. The browser loads the extension from that place. 
 
 ## Install in Brave
 
-1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.1.6/Grok-Voice-Reader-Extension.zip) and unzip it. The unzipped folder must contain `manifest.json`.
+1. Download [Grok-Voice-Reader-Extension.zip](https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.0/Grok-Voice-Reader-Extension.zip) and unzip it. The unzipped folder must contain `manifest.json`. On Windows or Linux, the installer already put that folder in `%LOCALAPPDATA%\Grok Voice Reader\extension` or `~/.local/share/grok-voice-reader/extension`.
 2. Open Brave and go to `brave://extensions`.
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
@@ -81,4 +81,4 @@ npm install
 npm test
 ```
 
-URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.1.6`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app, and it is not marked Latest. The desktop updater uses `/releases/latest`. Point the download button at the top of the main README at the new zip when you publish.
+URL patterns live in `src/config.js` and must match `manifest.json`. A release tag named `ext-v<version>` (for example `ext-v0.2.0`) builds `Grok-Voice-Reader-Extension.zip` and publishes it. That tag does not publish the desktop app, and it is not marked Latest. The desktop updater uses `/releases/latest`. Point the download button at the top of the main README at the new zip when you publish.

@@ -2,7 +2,7 @@
   "name": "grok-voice-reader-extension",
   "private": true,
   "scripts": {
-    "test": "node --test test/logic.test.js test/spacing.test.js test/extract.test.js test/extension.test.js"
+    "test": "node --test test/logic.test.js test/spacing.test.js test/player.test.js test/extract.test.js test/extension.test.js"
   },
   "devDependencies": {
     "jsdom": "^30.1.3",

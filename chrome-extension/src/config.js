@@ -35,11 +35,25 @@
   // Quiet period after the newest reply stops changing, before it is spoken.
   GV.SETTLE_MS = 1500;
 
+  GV.REPO = "chippybrown/voice-reader-for-grokbot";
+  GV.UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  GV.EXTRA_HOSTS = ["https://api.github.com/*"];
+
+  // Shown in hover tooltips. The same chords are suggested in the manifest.
+  GV.SHORTCUTS = {
+    previous: "Alt+Left",
+    playPause: "Alt+Shift+P",
+    next: "Alt+Right"
+  };
+
   GV.DEFAULTS = {
     enabled: true,
     voiceURI: "",
     rate: 1,
-    debug: false
+    debug: false,
+    newBotsAutoRead: true,
+    betaUpdates: false,
+    bots: {}
   };
 
   GV.clampRate = function clampRate(value) {

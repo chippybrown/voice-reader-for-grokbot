@@ -39,7 +39,19 @@ jobs:
             exit 1
           fi
 
+      - name: Publish only when this tag is already on main
+        id: gate
+        run: |
+          git fetch origin main --depth=100
+          if git merge-base --is-ancestor HEAD origin/main; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "This tag is not on main, so the release stays a draft for testing."
+          fi
+
       - name: Publish the extension release
+        if: steps.gate.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: Browser Extension ${{ steps.extver.outputs.version }} (Chrome, Edge, Brave)
