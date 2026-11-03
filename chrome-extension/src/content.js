@@ -34,6 +34,41 @@
     onResume: resumeSpeech
   });
 
+  var speechQueue = GV.createSpeechQueue({
+    speak: function (text, hooks) { speakUtterance(text, hooks); },
+    cancel: function () {
+      var synth = getSynth();
+      if (synth && synth.cancel) {
+        try { synth.cancel(); } catch (err) { /* already quiet */ }
+      }
+    },
+    pause: function () {
+      var synth = getSynth();
+      if (synth && synth.speaking && !synth.paused && typeof synth.pause === "function") {
+        try { synth.pause(); return true; } catch (err) { return false; }
+      }
+      return false;
+    },
+    resume: function () {
+      var synth = getSynth();
+      if (synth && synth.paused && typeof synth.resume === "function") {
+        try { synth.resume(); return true; } catch (err) { return false; }
+      }
+      return false;
+    },
+    voice: function () { return voiceForUtterance(); },
+    onerror: function (event, text) {
+      if (event && event.error === "not-allowed") {
+        queuedSpeech = text;
+        armUnlock();
+      }
+    },
+    onfinished: function () {
+      playback.markEnded();
+      showReading(playback.state().body);
+    }
+  });
+
   var session = GV.createSession({
     settleMs: GV.SETTLE_MS,
     onSpeak: speakAuto
@@ -151,27 +186,12 @@
   }
 
   function pauseSpeech() {
-    var synth = getSynth();
-    if (synth && synth.speaking && !synth.paused && typeof synth.pause === "function") {
-      try {
-        synth.pause();
-        return true;
-      } catch (err) { /* fall through and restart later */ }
-    }
-    if (synth && synth.cancel) {
-      try { synth.cancel(); } catch (err) { /* already quiet */ }
-    }
+    if (speechQueue) return speechQueue.pause();
     return false;
   }
 
   function resumeSpeech() {
-    var synth = getSynth();
-    if (synth && synth.paused && typeof synth.resume === "function") {
-      try {
-        synth.resume();
-        return true;
-      } catch (err) { /* restart the reply instead */ }
-    }
+    if (speechQueue) return speechQueue.resume();
     return false;
   }
 
@@ -205,12 +225,12 @@
     return replyItems.length ? replyItems[replyItems.length - 1] : null;
   }
 
-  function attemptSpeak(text, allowCancel) {
+  function speakUtterance(text, hooks) {
     var synth = getSynth();
     var Utterance = root.SpeechSynthesisUtterance;
+    hooks = hooks || {};
     if (!synth || !Utterance || !text) return;
     try {
-      if (allowCancel && (synth.speaking || synth.pending)) synth.cancel();
       var utterance = new Utterance(text);
       utterance.rate = GV.clampRate(rate);
       var voice = voiceForUtterance();
@@ -218,23 +238,30 @@
         utterance.voice = voice;
         if (voice.lang) utterance.lang = voice.lang;
       }
-      var token = ++speakToken;
-      utterance.onerror = function (event) {
-        if (event && event.error === "not-allowed") {
-          queuedSpeech = text;
-          armUnlock();
-        }
-      };
-      utterance.onend = function () {
-        if (token !== speakToken) return;
-        playback.markEnded();
-        showReading(playback.state().body);
-      };
+      utterance.onboundary = hooks.onboundary || null;
+      utterance.onend = hooks.onend || null;
+      utterance.onerror = hooks.onerror || null;
       synth.speak(utterance);
     } catch (err) {
       queuedSpeech = text;
       armUnlock();
     }
+  }
+
+  function attemptSpeak(text, allowCancel) {
+    if (!text) return;
+    if (!allowCancel) {
+      speakUtterance(text, {
+        onerror: function (event) {
+          if (event && event.error === "not-allowed") {
+            queuedSpeech = text;
+            armUnlock();
+          }
+        }
+      });
+      return;
+    }
+    if (speechQueue) speechQueue.start(text);
   }
 
   function unlockOnce() {
@@ -263,6 +290,7 @@
     queuedSpeech = "";
     disarmUnlock();
     speakToken += 1;
+    if (speechQueue) speechQueue.stop();
     session.stop();
     playback.stop();
     readingEl = null;

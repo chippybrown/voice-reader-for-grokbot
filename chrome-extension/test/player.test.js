@@ -47,6 +47,61 @@ test("previous and next walk assistant replies in order", () => {
   ]);
 });
 
+test("play resumes from the last word boundary", () => {
+  const chunks = GV.splitSpeechChunks("Alpha beta gamma. Delta epsilon.");
+  assert.equal(Array.from(chunks).join("|"), "Alpha beta gamma.|Delta epsilon.");
+  const mid = chunks[0].indexOf("gamma") + 2;
+  const plan = GV.resumeFromOffset(chunks, 0, mid);
+  assert.equal(plan[0].indexOf("gamma"), 0);
+  assert.equal(plan[1], "Delta epsilon.");
+  assert.equal(plan[0].indexOf("Alpha"), -1);
+
+  const spoken = [];
+  let hooks = null;
+  const queue = GV.createSpeechQueue({
+    speak: function (text, next) { spoken.push(text); hooks = next; },
+    cancel: function () {},
+    pause: function () { return false; },
+    resume: function () { return false; }
+  });
+  assert.equal(queue.start("Alpha beta gamma. Delta epsilon."), true);
+  assert.equal(spoken[0], "Alpha beta gamma. Delta epsilon.");
+  hooks.onboundary({ name: "word", charIndex: spoken[0].indexOf("gamma") + 2 });
+  assert.equal(queue.pause(), true);
+  assert.equal(queue.state().charIndex, mid);
+  assert.equal(queue.resume(), true);
+  assert.equal(spoken[1].indexOf("gamma"), 0);
+  hooks.onend();
+  assert.equal(spoken[2], "Delta epsilon.");
+
+  const reliable = [];
+  let resumed = 0;
+  const held = GV.createSpeechQueue({
+    speak: function (text) { reliable.push(text); },
+    pause: function () { return true; },
+    resume: function () { resumed += 1; return true; }
+  });
+  held.start("Short line.");
+  held.pause();
+  assert.equal(held.resume(), true);
+  assert.equal(resumed, 1);
+  assert.deepEqual(reliable, ["Short line."]);
+
+  const audio = {
+    paused: false,
+    ended: false,
+    currentTime: 4,
+    play: function () { this.paused = false; },
+    pause: function () { this.paused = true; }
+  };
+  queue.useAudio(audio);
+  assert.equal(queue.pause(), true);
+  assert.equal(audio.paused, true);
+  assert.equal(queue.resume(), true);
+  assert.equal(audio.paused, false);
+  assert.equal(audio.currentTime, 4);
+});
+
 test("pause holds the reply and resume restarts it only when the browser cannot", () => {
   const spoken = [];
   let resumeWorks = false;
@@ -181,42 +236,37 @@ function setRect(el, x, y, w, h) {
   };
 }
 
-test("controls stay centered between the mic and the voice button when the composer grows", async () => {
+test("controls stay in flow between the mic and the voice button", () => {
   const doc = window.document;
-  const box = doc.getElementById("composer");
   const host = doc.querySelector("[data-grok-voice-controls]");
   const mic = doc.getElementById("mic");
   const voice = doc.getElementById("voice");
-  assert.ok(box && host && mic && voice);
-  Object.defineProperty(host, "offsetWidth", { configurable: true, value: 88 });
-  Object.defineProperty(host, "offsetHeight", { configurable: true, value: 28 });
-  // The composer is tall. The mic and the voice button sit on its bottom row.
-  setRect(box, 80, 180, 640, 140);
+  assert.ok(host && mic && voice);
   setRect(mic, 400, 280, 32, 32);
   setRect(voice, 560, 276, 40, 40);
+  setRect(host, 448, 280, 88, 28);
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
   GV.mountTransport(doc, { mode: "playing" });
-  const top = parseFloat(host.style.top);
-  const left = parseFloat(host.style.left);
-  const buttonCenterY = ((280 + 312) + (276 + 316)) / 4;
-  const gapCenterX = (432 + 560) / 2;
-  assert.equal(host.style.position, "fixed");
-  assert.equal(host.getAttribute("data-grok-voice-placement"), "composer");
-  assert.ok(Math.abs((top + 14) - buttonCenterY) < 0.01, "vertical center " + top);
-  assert.ok(Math.abs((left + 44) - gapCenterX) < 0.01, "horizontal center " + left);
-  assert.ok(Math.abs((left - 432) - (560 - (left + 88))) < 0.01, "equal space on both sides");
-  assert.ok(Math.abs((top + 14) - (180 + 70)) > 20, "not centered on the tall composer");
-  // Multi-line text grows the composer upward. The buttons stay on the bottom row.
-  setRect(box, 80, 180, 640, 220);
-  setRect(mic, 400, 360, 32, 32);
-  setRect(voice, 560, 356, 40, 40);
-  window.dispatchEvent(new window.Event("input", { bubbles: true }));
-  await delay(40);
-  const grown = parseFloat(host.style.top);
-  const grownLeft = parseFloat(host.style.left);
-  assert.ok(Math.abs(grown - (top + 80)) < 0.01, "followed the bottom row " + grown);
-  assert.ok(Math.abs(grownLeft - left) < 0.01);
+  assert.equal(host.style.position, "relative");
+  assert.notEqual(host.style.position, "fixed");
+  assert.notEqual(host.style.position, "absolute");
+  assert.equal(host.style.alignItems, "center");
+  assert.equal(host.style.alignSelf, "flex-end");
+  assert.equal(host.style.marginLeft, host.style.marginRight);
+  assert.equal(parseFloat(host.style.marginLeft) > 0, true);
+  assert.equal(parseFloat(host.style.height), 40);
+  assert.equal(host.style.transform, "translateY(2px)");
   assert.equal(host.previousElementSibling.id, "mic");
   assert.equal(host.nextElementSibling.id, "voice");
+  setRect(mic, 0, 0, 0, 0);
+  setRect(voice, 0, 0, 0, 0);
+  setRect(host, 0, 0, 0, 0);
+  GV.mountTransport(doc, { mode: "playing" });
+  assert.equal(host.style.position, "relative");
+  assert.equal(host.style.height, "");
+  assert.equal(host.style.transform, "none");
+  assert.equal(host.style.marginLeft, host.style.marginRight);
 });
 
 test("controls sit above the composer when the mic and voice buttons are missing", () => {
