@@ -18,10 +18,25 @@
   var unlockArmed = false;
   var cachedVoice = null;
   var cachedVoiceURI = null;
+  var botSettings = GV.DEFAULTS;
+  var botIdentity = { id: "default", name: "Grok" };
+  var replyItems = [];
+  var speakToken = 0;
+  var readingEl = null;
+  var readingMode = "";
+  var botKey = "";
+
+  var playback = GV.createPlayback({
+    onSpeak: function (text, item) {
+      speakManual(text, item && (item.body || item.element));
+    },
+    onPause: pauseSpeech,
+    onResume: resumeSpeech
+  });
 
   var session = GV.createSession({
     settleMs: GV.SETTLE_MS,
-    onSpeak: speakAloud
+    onSpeak: speakAuto
   });
 
   function keyFor(el) {
@@ -83,12 +98,111 @@
     return cachedVoice;
   }
 
-  function speakAloud(text) {
+  function applyVoice() {
+    var next = GV.botVoiceURI(botSettings, botIdentity);
+    if (next === voiceURI && cachedVoice) return;
+    voiceURI = next;
+    cachedVoice = null;
+    cachedVoiceURI = null;
+    rememberVoice();
+  }
+
+  function syncBot() {
+    var label = GV.botLabel(document);
+    var nextKey = location.href + "\n" + label;
+    var identity = GV.botFromLocation(location.href, label);
+    var bots = GV.rememberBot(botSettings, identity);
+    var serialized = JSON.stringify(bots);
+    if (nextKey === botKey && serialized === JSON.stringify(botSettings.bots || {})) {
+      botIdentity = identity;
+      return;
+    }
+    botKey = nextKey;
+    botIdentity = identity;
+    botSettings.bots = bots;
+    if (chrome.storage && chrome.storage.local) {
+      try { chrome.storage.local.set({ bots: bots }); } catch (err) { /* storage can be unavailable in a test page */ }
+    }
+    applyVoice();
+  }
+
+  function controlOptions() {
+    return {
+      mode: playback.state().mode,
+      onPrevious: function () { playback.previous(); },
+      onToggle: function () { playback.toggle(); showReading(); },
+      onNext: function () { playback.next(); }
+    };
+  }
+
+  function showReading(element) {
+    var target = element || playback.state().body;
+    var mode = playback.state().mode;
+    if (!target) {
+      if (readingEl) GV.placeReadingControls(document, null);
+      readingEl = null;
+      readingMode = "";
+      return;
+    }
+    if (readingEl === target && readingMode === mode && target.classList.contains("grok-voice-reading")) return;
+    readingEl = target;
+    readingMode = mode;
+    GV.placeReadingControls(document, target, controlOptions());
+  }
+
+  function pauseSpeech() {
+    var synth = getSynth();
+    if (synth && synth.speaking && !synth.paused && typeof synth.pause === "function") {
+      try {
+        synth.pause();
+        return true;
+      } catch (err) { /* fall through and restart later */ }
+    }
+    if (synth && synth.cancel) {
+      try { synth.cancel(); } catch (err) { /* already quiet */ }
+    }
+    return false;
+  }
+
+  function resumeSpeech() {
+    var synth = getSynth();
+    if (synth && synth.paused && typeof synth.resume === "function") {
+      try {
+        synth.resume();
+        return true;
+      } catch (err) { /* restart the reply instead */ }
+    }
+    return false;
+  }
+
+  // Automatic reads honor the per-bot checkbox. Manual controls do not.
+  function speakAuto(text) {
+    if (!text) return;
+    if (!GV.botAutoRead(botSettings, botIdentity)) {
+      lastDetect.reason = "bot-muted";
+      lastDetect.snippet = snippetOf(text);
+      logResolve();
+      return;
+    }
+    var item = itemForSpeech(text);
+    if (item) playback.noteSpoken(item.key);
+    speakManual(text, item && (item.body || item.element));
+  }
+
+  function speakManual(text, element) {
     if (!text) return;
     lastDetect.reason = "spoke";
     lastDetect.snippet = snippetOf(text);
     logResolve();
     attemptSpeak(text, true);
+    showReading(element);
+  }
+
+  function itemForSpeech(text) {
+    for (var i = replyItems.length - 1; i >= 0; i--) {
+      if (replyItems[i] && replyItems[i].speech === text) return replyItems[i];
+    }
+    return replyItems.length ? replyItems[replyItems.length - 1] : null;
   }
 
   function attemptSpeak(text, allowCancel) {
@@ -104,11 +218,17 @@
         utterance.voice = voice;
         if (voice.lang) utterance.lang = voice.lang;
       }
+      var token = ++speakToken;
       utterance.onerror = function (event) {
         if (event && event.error === "not-allowed") {
           queuedSpeech = text;
           armUnlock();
         }
+      };
+      utterance.onend = function () {
+        if (token !== speakToken) return;
+        playback.markEnded();
+        showReading(playback.state().body);
       };
       synth.speak(utterance);
     } catch (err) {
@@ -142,7 +262,12 @@
   function stopSpeaking() {
     queuedSpeech = "";
     disarmUnlock();
+    speakToken += 1;
     session.stop();
+    playback.stop();
+    readingEl = null;
+    readingMode = "";
+    if (GV.placeReadingControls) GV.placeReadingControls(document, null, controlOptions());
     var synth = getSynth();
     if (synth && synth.cancel) {
       try { synth.cancel(); } catch (err) { /* already stopped */ }
@@ -238,7 +363,10 @@
       groups: lastDetect.groups,
       snippet: lastDetect.snippet,
       reason: lastDetect.reason,
-      mode: lastDetect.mode
+      mode: lastDetect.mode,
+      botId: botIdentity.id,
+      botName: botIdentity.name,
+      playback: playback.state().mode
     });
   }
 
@@ -274,8 +402,20 @@
   }
 
   function scan() {
+    syncBot();
     var report = GV.inspectAssistant(document);
     var replies = report.replies || [];
+    replyItems = [];
+    for (var i = 0; i < replies.length; i++) {
+      replyItems.push({
+        key: keyFor(replies[i].element),
+        speech: replies[i].speech,
+        element: replies[i].element,
+        body: replies[i].body || replies[i].element
+      });
+    }
+    playback.setItems(replyItems);
+    if (playback.state().mode !== "stopped") showReading();
     updateDebug(replies);
     var reason = "disabled";
     if (!session.isEnabled()) reason = "disabled";
@@ -364,8 +504,23 @@
       return;
     }
     if (message.type === "replay") {
-      var text = session.replay();
+      var text = session.getLastSpoken();
+      var item = itemForSpeech(text);
+      if (item) playback.noteSpoken(item.key);
+      if (text) speakManual(text, item && (item.body || item.element));
       sendResponse({ ok: Boolean(text), text: text || "" });
+      return;
+    }
+    if (message.type === "previous" || message.type === "next" || message.type === "play-pause") {
+      var played = "";
+      if (message.type === "previous") played = playback.previous();
+      else if (message.type === "next") played = playback.next();
+      else {
+        var toggled = playback.toggle();
+        played = toggled.speech || "";
+        showReading();
+      }
+      sendResponse({ ok: Boolean(played), text: played || "", mode: playback.state().mode });
       return;
     }
     if (message.type === "status") {
@@ -384,11 +539,11 @@
 
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== "local") return;
-    if (changes.voiceURI) {
-      voiceURI = changes.voiceURI.newValue || "";
-      cachedVoice = null;
-      cachedVoiceURI = null;
-      rememberVoice();
+    if (changes.voiceURI || changes.bots || changes.newBotsAutoRead) {
+      chrome.storage.local.get(GV.DEFAULTS, function (stored) {
+        botSettings = stored;
+        syncBot();
+      });
     }
     if (changes.rate) rate = GV.clampRate(changes.rate.newValue);
     if (changes.debug) {
@@ -400,18 +555,26 @@
   });
 
   function boot() {
+    if (GV.bindReplyClick) {
+      GV.bindReplyClick(document, function (node) {
+        var el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+        return Boolean(readingEl && el && readingEl.contains(el));
+      }, function () {
+        playback.toggle();
+        showReading();
+      });
+    }
+    if (GV.watchComposer) GV.watchComposer(document, controlOptions);
     startObserver();
     var synth = getSynth();
     if (synth && synth.addEventListener) {
       synth.addEventListener("voiceschanged", rememberVoice);
     }
     chrome.storage.local.get(GV.DEFAULTS, function (stored) {
-      voiceURI = stored.voiceURI || "";
+      botSettings = stored;
       rate = GV.clampRate(stored.rate);
       debug = stored.debug === true;
-      cachedVoice = null;
-      cachedVoiceURI = null;
-      rememberVoice();
+      syncBot();
       applyEnabled(stored.enabled !== false);
       scheduleScan();
     });

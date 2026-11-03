@@ -505,6 +505,14 @@
     return null;
   }
 
+  function inReadingControls(el) {
+    try {
+      return Boolean(el.closest && el.closest("[data-grok-voice-controls]"));
+    } catch (err) {
+      return false;
+    }
+  }
+
   function inComposer(el) {
     if (!el || el.nodeType !== 1) return false;
     var tag = el.tagName;
@@ -556,7 +564,7 @@
       var el = elementFrom(nodes[n]);
       if (!el) continue;
       saw = true;
-      if (!inComposer(el) && !inUserBubble(el)) return false;
+      if (!inComposer(el) && !inUserBubble(el) && !inReadingControls(el)) return false;
     }
     return saw;
   };

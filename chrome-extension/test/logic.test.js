@@ -29,17 +29,23 @@ test("match list is valid and copied into the manifest", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.ok(GV.MATCHES.length > 0);
   for (const pattern of GV.MATCHES) assert.equal(GV.patternValid(pattern), true);
-  assert.deepEqual(manifest.host_permissions, Array.from(GV.MATCHES));
+  assert.deepEqual(manifest.host_permissions, Array.from(GV.MATCHES).concat(GV.EXTRA_HOSTS));
   assert.deepEqual(manifest.content_scripts[0].matches, Array.from(GV.MATCHES));
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
   assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
-  assert.equal(manifest.version, "0.1.6");
+  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.commands.previous.suggested_key.default, GV.SHORTCUTS.previous);
+  assert.equal(manifest.commands["play-pause"].suggested_key.default, GV.SHORTCUTS.playPause);
+  assert.equal(manifest.commands.next.suggested_key.default, GV.SHORTCUTS.next);
   assert.deepEqual(manifest.content_scripts[0].js, [
     "src/config.js",
     "src/text.js",
     "src/detect.js",
     "src/reader.js",
+    "src/playback.js",
+    "src/bots.js",
+    "src/controls.js",
     "src/content.js"
   ]);
 });

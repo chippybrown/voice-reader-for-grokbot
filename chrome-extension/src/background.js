@@ -1,5 +1,5 @@
 /* global GrokVoice */
-importScripts("config.js", "text.js");
+importScripts("config.js", "text.js", "updates.js");
 
 var GV = globalThis.GrokVoice;
 var framesByTab = {};
@@ -79,7 +79,10 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       groups: message.groups || 0,
       snippet: message.snippet || "",
       reason: message.reason || "",
-      mode: message.mode || ""
+      mode: message.mode || "",
+      botId: message.botId || "",
+      botName: message.botName || "",
+      playback: message.playback || ""
     });
     try { sendResponse({ ok: true }); } catch (err) { /* port closed */ }
     return;
@@ -100,29 +103,14 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return true;
   }
   if (message.type === "broadcast" && sender.tab == null) {
-    chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
-      var tab = tabs[0];
-      if (!tab) {
-        sendResponse({ ok: false });
-        return;
-      }
-      var reports = globalThis.frameReportsFor(tab.id);
-      var ids = reports.map(function (report) { return report.frameId; });
-      if (!ids.length) ids = [0];
-      var pending = ids.length;
-      var text = "";
-      ids.forEach(function (frameId) {
-        chrome.tabs.sendMessage(tab.id, { type: message.command }, { frameId: frameId }, function (response) {
-          void chrome.runtime.lastError;
-          if (response && response.text) text = response.text;
-          pending -= 1;
-          if (!pending) {
-            try { sendResponse({ ok: Boolean(text) || message.command === "stop", text: text }); } catch (err) { /* port closed */ }
-          }
-        });
-      });
+    broadcastCommand(message.command, sendResponse);
+    return true;
+  }
+  if (message.type === "check-update") {
+    checkUpdates(Boolean(message.force)).then(function (notice) {
+      try { sendResponse({ ok: true, notice: notice || null }); } catch (err) { /* port closed */ }
     }).catch(function () {
-      try { sendResponse({ ok: false }); } catch (err) { /* port closed */ }
+      try { sendResponse({ ok: false, notice: null }); } catch (err) { /* port closed */ }
     });
     return true;
   }
@@ -136,4 +124,74 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   }
 });
 
+function broadcastCommand(command, sendResponse) {
+  chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
+    var tab = tabs[0];
+    if (!tab) {
+      if (sendResponse) sendResponse({ ok: false });
+      return;
+    }
+    var reports = globalThis.frameReportsFor(tab.id);
+    var ids = reports.map(function (report) { return report.frameId; });
+    if (!ids.length) ids = [0];
+    var pending = ids.length;
+    var text = "";
+    var mode = "";
+    ids.forEach(function (frameId) {
+      chrome.tabs.sendMessage(tab.id, { type: command }, { frameId: frameId }, function (response) {
+        void chrome.runtime.lastError;
+        if (response && response.text) text = response.text;
+        if (response && response.mode) mode = response.mode;
+        pending -= 1;
+        if (!pending && sendResponse) {
+          try {
+            sendResponse({ ok: Boolean(text) || command === "stop", text: text, mode: mode });
+          } catch (err) { /* port closed */ }
+        }
+      });
+    });
+  }).catch(function () {
+    if (sendResponse) {
+      try { sendResponse({ ok: false }); } catch (err) { /* port closed */ }
+    }
+  });
+}
+
+function checkUpdates(force) {
+  return chrome.storage.local.get(GV.DEFAULTS).then(function (stored) {
+    var now = Date.now();
+    if (!force && !GV.updateCheckDue(stored.updateCheckedAt, now)) {
+      return stored.updateNotice || null;
+    }
+    return fetch("https://api.github.com/repos/" + GV.REPO + "/releases?per_page=30", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "grok-voice-reader"
+      }
+    }).then(function (response) {
+      if (!response.ok) throw new Error("status " + response.status);
+      return response.json();
+    }).then(function (list) {
+      var notice = GV.pickExtensionUpdate(list, chrome.runtime.getManifest().version, {
+        beta: stored.betaUpdates === true
+      });
+      return chrome.storage.local.set({
+        updateCheckedAt: now,
+        updateNotice: notice
+      }).then(function () { return notice; });
+    }).catch(function () {
+      return chrome.storage.local.set({ updateCheckedAt: now }).then(function () {
+        return stored.updateNotice || null;
+      });
+    });
+  });
+}
+
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener(function (command) {
+    broadcastCommand(command);
+  });
+}
+
+checkUpdates(false);
 refreshAll();

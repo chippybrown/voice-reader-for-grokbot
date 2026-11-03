@@ -5,7 +5,7 @@
 }
 
 body {
-  width: 320px;
+  width: 360px;
   margin: 0;
   padding: 14px 14px 16px;
   color: #1c2421;
@@ -67,9 +67,38 @@ input[type="range"] {
   margin-top: 6px;
 }
 
+#update {
+  margin: 0 0 12px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #e5f6ec;
+  color: #0d3b24;
+}
+
+#update a {
+  color: inherit;
+  font-weight: 650;
+}
+
 .buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+button.icon {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 32px;
+  padding: 2px;
+}
+
+button.icon svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  display: block;
+  margin: 0 auto;
 }
 
 button {
@@ -96,6 +125,11 @@ input:focus-visible {
 
   #status {
     color: #c5d0c9;
+  }
+
+  #update {
+    background: #1d3a2b;
+    color: #d7f5e4;
   }
 
   button {
