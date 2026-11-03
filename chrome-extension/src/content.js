@@ -267,7 +267,7 @@
     playback.stop();
     readingEl = null;
     readingMode = "";
-    if (GV.placeReadingControls) GV.placeReadingControls(document, null);
+    if (GV.placeReadingControls) GV.placeReadingControls(document, null, controlOptions());
     var synth = getSynth();
     if (synth && synth.cancel) {
       try { synth.cancel(); } catch (err) { /* already stopped */ }
@@ -555,6 +555,16 @@
   });
 
   function boot() {
+    if (GV.bindReplyClick) {
+      GV.bindReplyClick(document, function (node) {
+        var el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+        return Boolean(readingEl && el && readingEl.contains(el));
+      }, function () {
+        playback.toggle();
+        showReading();
+      });
+    }
+    if (GV.watchComposer) GV.watchComposer(document, controlOptions);
     startObserver();
     var synth = getSynth();
     if (synth && synth.addEventListener) {
