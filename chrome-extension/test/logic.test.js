@@ -34,7 +34,7 @@ test("match list is valid and copied into the manifest", () => {
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
   assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.2.1");
   assert.equal(manifest.commands.previous.suggested_key.default, GV.SHORTCUTS.previous);
   assert.equal(manifest.commands["play-pause"].suggested_key.default, GV.SHORTCUTS.playPause);
   assert.equal(manifest.commands.next.suggested_key.default, GV.SHORTCUTS.next);

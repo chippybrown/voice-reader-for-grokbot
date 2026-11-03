@@ -175,6 +175,50 @@ test("controls are injected between the mic and the voice button and survive a r
   assert.equal(doc.getElementById("message").placeholder, "Message Moya");
 });
 
+function setRect(el, x, y, w, h) {
+  el.getBoundingClientRect = function () {
+    return { top: y, left: x, right: x + w, bottom: y + h, width: w, height: h, x: x, y: y };
+  };
+}
+
+test("controls stay centered between the mic and the voice button when the composer grows", async () => {
+  const doc = window.document;
+  const box = doc.getElementById("composer");
+  const host = doc.querySelector("[data-grok-voice-controls]");
+  const mic = doc.getElementById("mic");
+  const voice = doc.getElementById("voice");
+  assert.ok(box && host && mic && voice);
+  Object.defineProperty(host, "offsetWidth", { configurable: true, value: 88 });
+  Object.defineProperty(host, "offsetHeight", { configurable: true, value: 28 });
+  // The composer is tall. The mic and the voice button sit on its bottom row.
+  setRect(box, 80, 180, 640, 140);
+  setRect(mic, 400, 280, 32, 32);
+  setRect(voice, 560, 276, 40, 40);
+  GV.mountTransport(doc, { mode: "playing" });
+  const top = parseFloat(host.style.top);
+  const left = parseFloat(host.style.left);
+  const buttonCenterY = ((280 + 312) + (276 + 316)) / 4;
+  const gapCenterX = (432 + 560) / 2;
+  assert.equal(host.style.position, "fixed");
+  assert.equal(host.getAttribute("data-grok-voice-placement"), "composer");
+  assert.ok(Math.abs((top + 14) - buttonCenterY) < 0.01, "vertical center " + top);
+  assert.ok(Math.abs((left + 44) - gapCenterX) < 0.01, "horizontal center " + left);
+  assert.ok(Math.abs((left - 432) - (560 - (left + 88))) < 0.01, "equal space on both sides");
+  assert.ok(Math.abs((top + 14) - (180 + 70)) > 20, "not centered on the tall composer");
+  // Multi-line text grows the composer upward. The buttons stay on the bottom row.
+  setRect(box, 80, 180, 640, 220);
+  setRect(mic, 400, 360, 32, 32);
+  setRect(voice, 560, 356, 40, 40);
+  window.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await delay(40);
+  const grown = parseFloat(host.style.top);
+  const grownLeft = parseFloat(host.style.left);
+  assert.ok(Math.abs(grown - (top + 80)) < 0.01, "followed the bottom row " + grown);
+  assert.ok(Math.abs(grownLeft - left) < 0.01);
+  assert.equal(host.previousElementSibling.id, "mic");
+  assert.equal(host.nextElementSibling.id, "voice");
+});
+
 test("controls sit above the composer when the mic and voice buttons are missing", () => {
   const doc = window.document;
   const rich = doc.getElementById("composer");

@@ -1,7 +1,10 @@
 // YouTube-style previous, play/pause, and next. They live in the composer,
-// between the microphone and the voice button. If that pair is not there,
-// they sit in a fixed bar just above the composer's right edge.
-// The green outline stays on the reply. The old per-bubble bar is off.
+// centered in the gap between the microphone and the voice button, on the
+// same line as those two. The composer itself is taller than that bottom
+// row, so flex alignment on the composer puts the group at the top. The
+// group is placed from the two buttons' rectangles instead. If that pair
+// is not there, the group sits in a fixed bar just above the composer's
+// right edge. The green outline stays on the reply. The old per-bubble bar is off.
 (function (root) {
   "use strict";
 
@@ -69,11 +72,37 @@
     return /message/i.test(fieldHint(field));
   }
 
+  function buttonFrom(node) {
+    if (!node || node.nodeType !== 1) return null;
+    if (node.closest && node.closest("[data-grok-voice-controls]")) return null;
+    if (node.tagName === "BUTTON") return node;
+    if (!node.querySelectorAll) return null;
+    var buttons = [];
+    try { buttons = node.querySelectorAll("button"); } catch (err) { return null; }
+    for (var i = buttons.length - 1; i >= 0; i--) {
+      if (!buttons[i].closest || !buttons[i].closest("[data-grok-voice-controls]")) return buttons[i];
+    }
+    return null;
+  }
+
+  // The mic is the button just before the voice button. Skip our own group.
+  function buttonBefore(node) {
+    var cursor = node && node.previousElementSibling;
+    var guard = 0;
+    while (cursor && guard < 8) {
+      guard += 1;
+      var found = buttonFrom(cursor);
+      if (found) return found;
+      cursor = cursor.previousElementSibling;
+    }
+    return null;
+  }
+
   // The chat box, and where the controls should go.
   // mode "composer" means insert before the round voice button.
   // mode "above" means the mic and voice button were not both found.
   GV.findComposerSlot = function findComposerSlot(doc) {
-    var none = { mode: "none", box: null, field: null, voice: null };
+    var none = { mode: "none", box: null, field: null, voice: null, mic: null };
     if (!doc || !doc.querySelectorAll) return none;
     var fields = [];
     try {
@@ -112,9 +141,142 @@
       }
     }
     if (after.length >= 2) {
-      return { mode: "composer", box: box, field: field, voice: after[after.length - 1] };
+      var voice = after[after.length - 1];
+      var mic = buttonBefore(voice);
+      if (!mic || mic === voice) {
+        mic = null;
+        for (i = after.length - 2; i >= 0; i--) {
+          if (after[i] !== voice) {
+            mic = after[i];
+            break;
+          }
+        }
+      }
+      return { mode: "composer", box: box, field: field, voice: voice, mic: mic };
     }
-    return { mode: "above", box: box, field: field, voice: null };
+    return { mode: "above", box: box, field: field, voice: null, mic: null };
+  }
+
+  // The old in-flow spot, used when the mic or the voice button is missing.
+  function placeInFlow(host) {
+    if (!host) return;
+    host.style.position = "relative";
+    host.style.top = "";
+    host.style.left = "";
+    host.style.right = "";
+    host.style.bottom = "";
+    host.style.transform = "";
+    host.style.margin = "0";
+  }
+
+  // left = midpoint of the gap minus half the group width.
+  // top = average of the two vertical centers minus half the group height.
+  function positionInButtonGap(host, mic, voice) {
+    if (!host || !mic || !voice || !mic.getBoundingClientRect || !voice.getBoundingClientRect) {
+      placeInFlow(host);
+      return;
+    }
+    var micRect = mic.getBoundingClientRect();
+    var voiceRect = voice.getBoundingClientRect();
+    var width = host.offsetWidth;
+    var height = host.offsetHeight;
+    if (micRect.width <= 0 || micRect.height <= 0 || voiceRect.width <= 0 || voiceRect.height <= 0 || !width || !height) {
+      scheduleGapRetry(host, mic, voice);
+      return;
+    }
+    var centerY = ((micRect.top + micRect.bottom) + (voiceRect.top + voiceRect.bottom)) / 4;
+    var centerX = (micRect.right + voiceRect.left) / 2;
+    host.style.position = "fixed";
+    host.style.margin = "0";
+    host.style.right = "auto";
+    host.style.bottom = "auto";
+    host.style.transform = "none";
+    host.style.top = (centerY - (height / 2)) + "px";
+    host.style.left = (centerX - (width / 2)) + "px";
+    host.__grokVoiceGapTries = 0;
+  }
+
+  function scheduleGapRetry(host, mic, voice) {
+    var tries = host.__grokVoiceGapTries || 0;
+    if (tries >= 4 || host.__grokVoiceGapWait) return;
+    host.__grokVoiceGapTries = tries + 1;
+    host.__grokVoiceGapWait = true;
+    var doc = host.ownerDocument;
+    var view = doc && doc.defaultView;
+    var run = function () {
+      host.__grokVoiceGapWait = false;
+      if (!host.isConnected || host.getAttribute("data-grok-voice-placement") !== "composer") return;
+      var nextMic = mic && mic.isConnected !== false ? mic : host.__grokVoiceMic;
+      var nextVoice = voice && voice.isConnected !== false ? voice : host.__grokVoiceVoice;
+      if (!nextMic || !nextVoice) return;
+      positionInButtonGap(host, nextMic, nextVoice);
+    };
+    if (view && view.requestAnimationFrame) view.requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
+  function repositionComposer(doc) {
+    if (!currentHost || !currentHost.isConnected) return;
+    if (currentHost.getAttribute("data-grok-voice-placement") !== "composer") return;
+    var mic = currentHost.__grokVoiceMic;
+    var voice = currentHost.__grokVoiceVoice;
+    if (!mic || !voice || mic.isConnected === false || voice.isConnected === false) {
+      var slot = GV.findComposerSlot(doc);
+      if (!slot || slot.mode !== "composer" || !slot.mic || !slot.voice) return;
+      mic = slot.mic;
+      voice = slot.voice;
+      currentHost.__grokVoiceMic = mic;
+      currentHost.__grokVoiceVoice = voice;
+    }
+    positionInButtonGap(currentHost, mic, voice);
+  }
+
+  function ensureComposerTracking(doc) {
+    if (!doc || doc.__grokVoiceGapTrack) return;
+    doc.__grokVoiceGapTrack = true;
+    var scheduled = false;
+    var observed = [];
+    function schedule() {
+      if (scheduled) return;
+      scheduled = true;
+      var view = doc.defaultView;
+      var run = function () {
+        scheduled = false;
+        repositionComposer(doc);
+      };
+      if (view && view.requestAnimationFrame) view.requestAnimationFrame(run);
+      else setTimeout(run, 16);
+    }
+    var view = doc.defaultView;
+    if (view && view.addEventListener) {
+      view.addEventListener("resize", schedule, true);
+      view.addEventListener("scroll", schedule, true);
+      view.addEventListener("input", schedule, true);
+      if (view.visualViewport && view.visualViewport.addEventListener) {
+        view.visualViewport.addEventListener("resize", schedule);
+        view.visualViewport.addEventListener("scroll", schedule);
+      }
+    }
+    if (doc.addEventListener) doc.addEventListener("input", schedule, true);
+    if (view && typeof view.ResizeObserver === "function") {
+      try { doc.__grokVoiceGapObserver = new view.ResizeObserver(schedule); } catch (err) { doc.__grokVoiceGapObserver = null; }
+    }
+    doc.__grokVoiceObserveGap = function (nodes) {
+      var ro = doc.__grokVoiceGapObserver;
+      if (!ro || !nodes) return;
+      var i;
+      for (i = 0; i < observed.length; i++) {
+        try { ro.unobserve(observed[i]); } catch (err) { /* element may be gone */ }
+      }
+      observed = [];
+      for (i = 0; i < nodes.length; i++) {
+        if (!nodes[i] || nodes[i].nodeType !== 1) continue;
+        try {
+          ro.observe(nodes[i]);
+          observed.push(nodes[i]);
+        } catch (err) { /* not an element ResizeObserver can watch */ }
+      }
+    };
   };
 
   function positionAbove(host, box) {
@@ -264,12 +426,20 @@
       if (!currentHost || !currentHost.isConnected || currentHost.getAttribute("data-grok-voice-placement") !== "composer") {
         discardHost();
         currentHost = build(doc);
-        currentHost.style.position = "relative";
       }
-      if (currentHost.nextElementSibling !== slot.voice) {
+      currentHost.__grokVoiceMic = slot.mic || null;
+      currentHost.__grokVoiceVoice = slot.voice || null;
+      if (slot.voice.parentNode && currentHost.nextElementSibling !== slot.voice) {
         slot.voice.parentNode.insertBefore(currentHost, slot.voice);
       }
       currentHost.setAttribute("data-grok-voice-placement", "composer");
+      if (slot.mic && slot.voice) {
+        positionInButtonGap(currentHost, slot.mic, slot.voice);
+        ensureComposerTracking(doc);
+        if (doc.__grokVoiceObserveGap) doc.__grokVoiceObserveGap([slot.box, slot.field, slot.mic, slot.voice]);
+      } else {
+        placeInFlow(currentHost);
+      }
     } else if (slot.mode === "above") {
       if (!currentHost || !currentHost.isConnected || currentHost.getAttribute("data-grok-voice-placement") !== "above") {
         discardHost();
