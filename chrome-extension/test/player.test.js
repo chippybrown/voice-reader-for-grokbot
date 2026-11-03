@@ -60,32 +60,44 @@ test("play resumes from the last word boundary", () => {
   let hooks = null;
   const queue = GV.createSpeechQueue({
     speak: function (text, next) { spoken.push(text); hooks = next; },
-    cancel: function () {},
-    pause: function () { return false; },
-    resume: function () { return false; }
+    cancel: function () {}
   });
   assert.equal(queue.start("Alpha beta gamma. Delta epsilon."), true);
-  assert.equal(spoken[0], "Alpha beta gamma. Delta epsilon.");
-  hooks.onboundary({ name: "word", charIndex: spoken[0].indexOf("gamma") + 2 });
+  assert.equal(spoken[0], "Alpha beta gamma.");
+  hooks.onboundary({ name: "word", charIndex: mid });
   assert.equal(queue.pause(), true);
   assert.equal(queue.state().charIndex, mid);
   assert.equal(queue.resume(), true);
   assert.equal(spoken[1].indexOf("gamma"), 0);
   hooks.onend();
   assert.equal(spoken[2], "Delta epsilon.");
+});
 
-  const reliable = [];
-  let resumed = 0;
-  const held = GV.createSpeechQueue({
-    speak: function (text) { reliable.push(text); },
-    pause: function () { return true; },
-    resume: function () { resumed += 1; return true; }
+test("play resumes the current sentence when no word boundary is reported", () => {
+  const spoken = [];
+  let hooks = null;
+  const queue = GV.createSpeechQueue({
+    speak: function (text, next) {
+      spoken.push(text);
+      hooks = next;
+      if (next.onstart) next.onstart();
+    },
+    cancel: function () {}
   });
-  held.start("Short line.");
-  held.pause();
-  assert.equal(held.resume(), true);
-  assert.equal(resumed, 1);
-  assert.deepEqual(reliable, ["Short line."]);
+  assert.equal(queue.start("Alpha beta gamma. Delta epsilon. Final sentence here."), true);
+  assert.equal(spoken[0], "Alpha beta gamma.");
+  hooks.onend();
+  assert.equal(spoken[1], "Delta epsilon.");
+  assert.equal(queue.state().index, 1);
+  assert.equal(queue.state().charIndex, 0);
+  assert.equal(queue.pause(), true);
+  assert.equal(queue.state().index, 1);
+  assert.equal(queue.resume(), true);
+  assert.equal(spoken[2], "Delta epsilon.");
+  assert.notEqual(spoken[2], "Alpha beta gamma.");
+  hooks.onend();
+  assert.equal(spoken[3], "Final sentence here.");
+  assert.equal(spoken.indexOf("Alpha beta gamma.") === spoken.length - 1, false);
 
   const audio = {
     paused: false,
@@ -217,8 +229,13 @@ test("controls are injected between the mic and the voice button and survive a r
   field.value = "still typing";
   assert.equal(field.value, "still typing");
   const pause = host.shadowRoot.querySelector('[data-action="play-pause"]');
-  assert.equal(pause.getAttribute("aria-label").indexOf("Pause (Alt+Shift+P)") === 0, true);
-  assert.equal(pause.getAttribute("aria-label").indexOf("Click the reply") !== -1, true);
+  assert.equal(pause.getAttribute("aria-label"), "Pause");
+  assert.equal(pause.title, "Pause");
+  assert.equal(pause.querySelector(".tip"), null);
+  const previous = host.shadowRoot.querySelector('[data-action="previous"]');
+  const next = host.shadowRoot.querySelector('[data-action="next"]');
+  assert.equal(previous.title, "Previous");
+  assert.equal(next.title, "Next");
   GV.watchComposer(doc, function () { return { mode: "paused" }; });
   box.innerHTML = composerMarkup();
   await delay(30);
@@ -259,6 +276,15 @@ test("controls stay in flow between the mic and the voice button", () => {
   assert.equal(host.style.transform, "translateY(2px)");
   assert.equal(host.previousElementSibling.id, "mic");
   assert.equal(host.nextElementSibling.id, "voice");
+  let toggles = 0;
+  GV.mountTransport(doc, {
+    mode: "playing",
+    onToggle: function () { toggles += 1; }
+  });
+  const play = host.shadowRoot.querySelector('[data-action="play-pause"]');
+  play.dispatchEvent(new window.MouseEvent("click", { bubbles: true, composed: true }));
+  play.dispatchEvent(new window.MouseEvent("click", { bubbles: true, composed: true }));
+  assert.equal(toggles, 1);
   setRect(mic, 0, 0, 0, 0);
   setRect(voice, 0, 0, 0, 0);
   setRect(host, 0, 0, 0, 0);

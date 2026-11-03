@@ -187,63 +187,48 @@
     return true;
   };
 
-  // Speaks a reply as chunks. Pause keeps the chunk index and charIndex.
-  // Resume uses the engine when that is reliable, otherwise the saved offset.
-  // An audio element uses pause() and play() so its position stays.
+  // Speaks a reply one sentence at a time. Pause remembers the sentence
+  // even when the browser never reports a word boundary. Play continues
+  // from that sentence. An audio element uses pause() and play().
   GV.createSpeechQueue = function createSpeechQueue(options) {
     options = options || {};
     var speak = options.speak || function () {};
     var cancel = options.cancel || function () {};
-    var pauseEngine = options.pause || function () { return false; };
-    var resumeEngine = options.resume || function () { return false; };
-    var voiceFor = options.voice || function () { return null; };
     var chunks = [];
     var index = 0;
     var charIndex = 0;
     var paused = false;
     var generation = 0;
     var audio = null;
-    var liveText = "";
-
-    function locate(parts, absolute) {
-      var cursor = 0;
-      var i;
-      for (i = 0; i < parts.length; i++) {
-        var size = String(parts[i] || "").length;
-        if (absolute < cursor + size || i === parts.length - 1) {
-          var local = absolute - cursor;
-          if (local < 0) local = 0;
-          if (local > size) local = size;
-          return { index: i, charIndex: local };
-        }
-        cursor += size + 1;
-      }
-      return { index: 0, charIndex: 0 };
-    }
 
     function playFrom(list, start, gen) {
       chunks = list || [];
-      index = start;
-      charIndex = 0;
-      paused = false;
-      if (!chunks.length || start >= chunks.length) {
+      if (!chunks.length || start >= chunks.length || start < 0) {
         if (options.onfinished && gen === generation) options.onfinished();
         return false;
       }
+      index = start;
+      charIndex = 0;
+      paused = false;
       var text = chunks[start];
       if (!text) return playFrom(chunks, start + 1, gen);
-      liveText = text;
       speak(text, {
+        onstart: function () {
+          if (gen !== generation) return;
+          index = start;
+        },
         onboundary: function (event) {
           if (gen !== generation || paused || !event) return;
           var name = event.name || "word";
           if (name !== "word" && name !== "sentence") return;
           var next = Number(event.charIndex);
           if (next !== next) return;
+          index = start;
           charIndex = next;
         },
         onend: function () {
           if (gen !== generation || paused) return;
+          index = start;
           playFrom(chunks, start + 1, gen);
         },
         onerror: function (event) {
@@ -261,32 +246,8 @@
         cancel();
         var full = String(text || "").replace(/\s+/g, " ").trim();
         var parts = GV.splitSpeechChunks(full);
-        chunks = parts;
-        index = 0;
-        charIndex = 0;
-        liveText = full;
-        if (!full) return false;
-        var gen = generation;
-        speak(full, {
-          onboundary: function (event) {
-            if (gen !== generation || paused || !event) return;
-            var name = event.name || "word";
-            if (name !== "word" && name !== "sentence") return;
-            var next = Number(event.charIndex);
-            if (next !== next) return;
-            var where = locate(parts, next);
-            index = where.index;
-            charIndex = where.charIndex;
-          },
-          onend: function () {
-            if (gen !== generation || paused) return;
-            if (options.onfinished) options.onfinished();
-          },
-          onerror: function (event) {
-            if (options.onerror) options.onerror(event, full);
-          }
-        });
-        return true;
+        if (!parts.length) return false;
+        return playFrom(parts, 0, generation);
       },
       useAudio: function (element) {
         generation += 1;
@@ -303,10 +264,6 @@
           paused = true;
           return true;
         }
-        if (GV.resumeIsReliable(liveText, voiceFor()) && pauseEngine()) {
-          paused = true;
-          return true;
-        }
         paused = true;
         generation += 1;
         cancel();
@@ -318,16 +275,12 @@
           try { audio.play(); } catch (err) { return false; }
           return true;
         }
-        if (paused && GV.resumeIsReliable(liveText, voiceFor()) && resumeEngine()) {
-          paused = false;
-          return true;
-        }
+        if (!paused || !chunks.length) return false;
         var plan = GV.resumeFromOffset(chunks, index, charIndex);
         if (!plan.length) return false;
         generation += 1;
         var gen = generation;
         cancel();
-        liveText = plan[0] || "";
         return playFrom(plan, 0, gen);
       },
       stop: function () {

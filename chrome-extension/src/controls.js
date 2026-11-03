@@ -25,14 +25,23 @@
 
   GV.controlTooltips = function controlTooltips() {
     var shortcuts = GV.SHORTCUTS || {};
-    var click = " Click the reply to play or pause.";
     return {
-      previous: "Previous reply (" + (shortcuts.previous || "Alt+Left") + ")",
-      play: "Play (" + (shortcuts.playPause || "Alt+Shift+P") + ")." + click,
-      pause: "Pause (" + (shortcuts.playPause || "Alt+Shift+P") + ")." + click,
-      next: "Next reply (" + (shortcuts.next || "Alt+Right") + ")"
+      previous: "Previous",
+      play: "Play (" + (shortcuts.playPause || "Alt+Shift+P") + ")",
+      pause: "Pause",
+      next: "Next"
     };
   };
+
+  var lastUiToggle = 0;
+
+  // A button click and the green-outline click can both arrive for one press.
+  function uiToggle(fn) {
+    var now = Date.now();
+    if (now - lastUiToggle < 400) return;
+    lastUiToggle = now;
+    if (fn) fn();
+  }
 
   function ensureStyle(doc) {
     if (!doc.getElementById) return;
@@ -45,7 +54,7 @@
 
   function buttonHtml(action, icon, tip) {
     return '<button type="button" data-action="' + action + '" title="' + tip + '" aria-label="' + tip + '">' +
-      ICONS[icon] + '<span class="tip">' + tip + "</span></button>";
+      ICONS[icon] + "</button>";
   }
 
   function paint(host, mode) {
@@ -56,7 +65,9 @@
     if (!toggle) return;
     var playing = mode === "playing";
     var tip = playing ? tips.pause : tips.play;
-    toggle.innerHTML = ICONS[playing ? "pause" : "play"] + '<span class="tip">' + tip + "</span>";
+    var stale = toggle.querySelectorAll(".tip");
+    for (var i = 0; i < stale.length; i++) stale[i].parentNode.removeChild(stale[i]);
+    toggle.innerHTML = ICONS[playing ? "pause" : "play"];
     toggle.title = tip;
     toggle.setAttribute("aria-label", tip);
   }
@@ -253,8 +264,19 @@
     }
   }
 
+  function eventHitsControls(event) {
+    var path = event && event.composedPath ? event.composedPath() : [];
+    var i;
+    for (i = 0; i < path.length; i++) {
+      var node = path[i];
+      if (node && node.getAttribute && node.getAttribute("data-grok-voice-controls")) return true;
+    }
+    return interactiveTarget(event && event.target);
+  }
+
   // A plain click on the outlined reply toggles play. Drags, double-clicks,
-  // links, and modifier keys do not.
+  // links, and modifier keys do not. A press on the playback buttons does not
+  // also toggle from here.
   GV.bindReplyClick = function bindReplyClick(doc, isInside, onToggle) {
     if (!doc || doc.__grokVoiceClickBound) return;
     doc.__grokVoiceClickBound = true;
@@ -270,12 +292,16 @@
     function modified(event) {
       return event.ctrlKey || event.metaKey || event.altKey || event.shiftKey;
     }
+    doc.addEventListener("pointerdown", function (event) {
+      if (eventHitsControls(event)) doc.__grokVoiceControlsPress = Date.now();
+    }, true);
     doc.addEventListener("mousedown", function (event) {
+      if (eventHitsControls(event)) doc.__grokVoiceControlsPress = Date.now();
       if (event.button !== 0 || event.detail > 1) {
         cancel();
         return;
       }
-      if (modified(event) || !isInside(event.target) || interactiveTarget(event.target)) {
+      if (modified(event) || eventHitsControls(event) || !isInside(event.target) || interactiveTarget(event.target)) {
         pending = null;
         return;
       }
@@ -285,6 +311,7 @@
       var start = pending;
       pending = null;
       if (!start || event.button !== 0 || event.detail > 1 || modified(event)) return;
+      if (doc.__grokVoiceControlsPress && Date.now() - doc.__grokVoiceControlsPress < 1000) return;
       if (Math.abs(event.clientX - start.x) > 5 || Math.abs(event.clientY - start.y) > 5) return;
       if (!isInside(event.target) || interactiveTarget(event.target)) return;
       if (timer) clearTimeout(timer);
@@ -325,8 +352,6 @@
       "button{position:relative;width:28px;height:28px;padding:0;border:0;border-radius:4px;background:transparent;color:#fff;cursor:pointer;}" +
       "button:hover,button:focus{background:rgba(255,255,255,.16);}" +
       "svg{width:20px;height:20px;fill:#fff;display:block;margin:4px auto;}" +
-      ".tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);padding:4px 6px;border-radius:4px;background:#111;color:#fff;font:12px/1.2 Segoe UI,sans-serif;white-space:nowrap;pointer-events:none;}" +
-      "button:hover .tip,button:focus .tip{display:block;}" +
       "</style>" +
       '<div class="bar">' +
       buttonHtml("previous", "previous", tips.previous) +
@@ -342,7 +367,7 @@
       event.stopPropagation();
       var action = button.getAttribute("data-action");
       if (action === "previous" && handlers.onPrevious) handlers.onPrevious();
-      if (action === "play-pause" && handlers.onToggle) handlers.onToggle();
+      if (action === "play-pause") uiToggle(handlers.onToggle);
       if (action === "next" && handlers.onNext) handlers.onNext();
     });
     return host;

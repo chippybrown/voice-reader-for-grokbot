@@ -1,10 +1,10 @@
 # Grokbot Voice
 
-<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.2/Grok-Voice-Reader-Setup.exe"><img alt="Windows installer" src="https://img.shields.io/badge/Windows_installer-0.2.2-2ea44f?style=for-the-badge"></a>
-<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.2/Grok-Voice-Reader-x86_64.AppImage"><img alt="Linux AppImage" src="https://img.shields.io/badge/Linux_AppImage-0.2.2-2ea44f?style=for-the-badge"></a>
-<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.2/Grok-Voice-Reader-Extension.zip"><img alt="Zip" src="https://img.shields.io/badge/Zip-0.2.2-555555?style=for-the-badge"></a>
+<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.3/Grok-Voice-Reader-Setup.exe"><img alt="Windows installer" src="https://img.shields.io/badge/Windows_installer-0.2.3-2ea44f?style=for-the-badge"></a>
+<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.3/Grok-Voice-Reader-x86_64.AppImage"><img alt="Linux AppImage" src="https://img.shields.io/badge/Linux_AppImage-0.2.3-2ea44f?style=for-the-badge"></a>
+<a href="https://github.com/chippybrown/voice-reader-for-grokbot/releases/download/ext-v0.2.3/Grok-Voice-Reader-Extension.zip"><img alt="Zip" src="https://img.shields.io/badge/Zip-0.2.3-555555?style=for-the-badge"></a>
 
-The browser extension reads each new Grok reply aloud in Chrome, Edge, or Brave, including a chat at grok.com/bot. These buttons are on the [0.2.2 draft](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.2.2) until that release is published. GitHub’s `/releases/latest` address stays on the desktop app, because the desktop updater uses it.
+The browser extension reads each new Grok reply aloud in Chrome, Edge, or Brave, including a chat at grok.com/bot. These buttons are on the [0.2.3 draft](https://github.com/chippybrown/voice-reader-for-grokbot/releases/tag/ext-v0.2.3) until that release is published. GitHub’s `/releases/latest` address stays on the desktop app, because the desktop updater uses it.
 
 1. Windows: double-click **Windows installer**. It copies the extension to `%LOCALAPPDATA%\Grok Voice Reader\extension`. No administrator password. Linux: run **Linux AppImage**. It copies the extension to `~/.local/share/grok-voice-reader/extension`. Or unzip **Zip** into one of those folders yourself.
 2. Chrome: open `chrome://extensions`. Edge: open `edge://extensions`. Brave: open `brave://extensions`. Turn on **Developer mode**, click **Load unpacked**, and choose that folder.

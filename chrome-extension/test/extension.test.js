@@ -69,6 +69,8 @@ async function stubSpeech(world) {
     globalThis.__grokVoiceSpoken = spoken;
     function record(utterance) {
       spoken.push(String(utterance && utterance.text || ""));
+      try { if (utterance && utterance.onstart) utterance.onstart(); } catch (err) {}
+      try { if (utterance && utterance.onend) utterance.onend(); } catch (err) {}
     }
     const proto = globalThis.SpeechSynthesis && globalThis.SpeechSynthesis.prototype;
     if (proto) {
@@ -134,16 +136,16 @@ test("extension speaks only the newest reply, once", { timeout: 60000 }, async (
     assert.deepEqual(await spokenTexts(world), [], "spoke before the reply settled");
 
     const spoken = await waitForSpoken(world);
-    assert.deepEqual(spoken, [expected]);
+    assert.equal(spoken.join(" "), expected);
     for (const banned of ["stay quiet", "Still old", "Hidden secret", "CSSHIDDEN", "Aria hidden", "Do not read", "What was already asked", "File menu", "Tooltip hint", "Moya", "2:14", "2:15", "Copy", "example.com", "secret-path", "*", "`"]) {
-      assert.equal(spoken[0].includes(banned), false, banned);
+      assert.equal(spoken.join(" ").includes(banned), false, banned);
     }
 
     await page.evaluate(() => {
       document.getElementById("stream-body").classList.add("touched");
     });
     await delay(1800);
-    assert.deepEqual(await spokenTexts(world), [expected]);
+    assert.equal((await spokenTexts(world)).join(" "), expected);
 
     await world.evaluate("new Promise((resolve) => chrome.storage.local.set({ debug: true }, resolve))");
     await page.waitForSelector(".grok-voice-debug-target", { timeout: 3000 });
