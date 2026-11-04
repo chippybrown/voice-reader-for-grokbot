@@ -12,12 +12,16 @@ import os
 import re
 import time
 import unicodedata
+import urllib.parse
 
 
 PERSISTENCE_NAME = "sand-client-persistence"
 APP_DIR_NAMES = ("Grok Bot", "grok-bot", "Grokbot")
 TRANSCRIPT_SLICE = re.compile(r"^sand\.client\.slice\.account\.(.+)\.transcript\.replicas\.(.+)$")
 ROSTER_SLICE = re.compile(r"^sand\.client\.slice\.account\.(.+)\.roster\.last-roster$")
+# Grok Bot 0.78.1. The value is {"agentId": "<uuid>"}. There is no selectedAgentId key.
+LAST_AGENT_SLICE = re.compile(r"^sand\.client\.slice\.account\.(.+)\.selection\.last-agent$")
+ACCOUNT_SLOT_KEY = "sand.client.slice.client-meta.account-slot"
 _BASE32 = "abcdefghijklmnopqrstuvwxyz234567"
 
 
@@ -615,6 +619,7 @@ def _transcripts(directory):
 _CURRENT_AGENT_KEYS = {
     "selectedagentid", "activeagentid", "currentagentid", "openagentid",
     "focusedagentid", "selectedagent", "activeagent", "currentagent",
+    "agentid", "lastagentid", "lastagent",
 }
 _SELECTED_FLAGS = ("selected", "active", "isSelected", "isActive", "isCurrent", "isOpen")
 _SELECTION_HINTS = (
@@ -695,6 +700,7 @@ def _selection_strength(key):
     strong = (
         "selected-agent", "selectedagent", "active-agent", "activeagent",
         "current-agent", "currentagent", "focused-agent", "ui.selection", "ui-selection",
+        "selection.last-agent", "last-agent",
     )
     if any(hint in lowered for hint in weak) and not any(hint in lowered for hint in strong):
         return "weak"
@@ -725,6 +731,87 @@ def _selection_hits(slices, accounts, known):
             continue
         hits.append((_mtime(path), next(iter(found)), _account_for_key(key, accounts), strength))
     return hits
+
+
+def _canon_account(text):
+    """grok%7Cuser_x and grok|user_x are the same account."""
+    raw = urllib.parse.unquote(str(text or "").strip())
+    return urllib.parse.unquote(raw)
+
+
+def _same_account(left, right):
+    a, b = _canon_account(left), _canon_account(right)
+    return bool(a) and a == b
+
+
+def _account_from_slot(value):
+    """The active account id stored in client-meta.account-slot.
+
+    The 66-byte file's exact JSON was not captured. A string value and a
+    small object both count, and grok%7Cuser_x matches grok|user_x.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        for key in (
+            "accountId", "account", "id", "slot", "active", "userId", "user",
+            "accountSlot", "activeAccount", "activeAccountId", "name",
+        ):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+        strings = [item.strip() for item in value.values() if isinstance(item, str) and item.strip()]
+        if len(strings) == 1:
+            return strings[0]
+        inner = value.get("value")
+        if isinstance(inner, (str, dict)) and inner is not value:
+            return _account_from_slot(inner)
+    return None
+
+
+def _slot_account(slices):
+    for key, path in slices:
+        if key != ACCOUNT_SLOT_KEY and not key.endswith("client-meta.account-slot"):
+            continue
+        return _account_from_slot(_document_value(path))
+    return None
+
+
+def _last_agent(slices, account):
+    """(agent id, account segment) from selection.last-agent. Newest file wins."""
+    found = []
+    for key, path in slices:
+        match = LAST_AGENT_SLICE.match(key)
+        if not match:
+            continue
+        if account and not _same_account(match.group(1), account):
+            continue
+        raw = _document_value(path)
+        agent = None
+        if isinstance(raw, dict):
+            for field in ("agentId", "agent", "id", "selectedAgentId", "lastAgentId"):
+                item = raw.get(field)
+                if isinstance(item, str) and item.strip():
+                    agent = item.strip()
+                    break
+        elif isinstance(raw, str) and raw.strip():
+            agent = raw.strip()
+        if agent:
+            found.append((_mtime(path), agent, match.group(1)))
+    if not found:
+        return None, None
+    found.sort()
+    return found[-1][1], found[-1][2]
+
+
+def _viewed_score(row):
+    """Higher when the file was saved again without a new message (opened, not replied)."""
+    return (row.get("stamp") or 0) - (_newest_message_ms(row) / 1000.0)
+
+
+def _viewed_key(row):
+    """Last viewed first. The same gap keeps the newer file, then a stable id."""
+    return (_viewed_score(row), row.get("stamp") or 0, row.get("agent_id") or "")
 
 
 def _freshest_account(slices, accounts):
@@ -899,11 +986,16 @@ def _load_stores(folders):
 
 
 def _row_for(rows, account, agent_id):
-    matches = [row for row in rows if row["agent_id"] == agent_id and (account is None or row["account"] == account)]
-    if account is None and len(matches) == 1:
+    matches = [
+        row for row in rows
+        if row["agent_id"] == agent_id and (account is None or _same_account(row["account"], account))
+    ]
+    if len(matches) == 1:
         return matches[0]
+    if account is None:
+        return None
     for row in matches:
-        if row["account"] == account:
+        if _same_account(row["account"], account):
             return row
     return None
 
@@ -972,30 +1064,40 @@ def _focused_opens(rows):
     return []
 
 
-def active_transcript(directory, window_titles=None, directories=None):
-    """The conversation on screen now, from the saved files only.
+def active_transcript(directory, window_titles=None, directories=None, follow_path=None):
+    """The conversation visible in the Grok Bot window.
 
-    The window title is ignored on every platform. A bare "Grok Bot" title
-    names no bot, and a title that does is still not the source of truth.
-    The open chat is the transcript that was rewritten when it was shown,
-    if exactly one was. Otherwise it is the saved selection, then a roster
-    row marked selected, then the only transcript in the account. Several
-    chats and no fresh signal means we are not sure: return None so Back
-    stays quiet instead of playing a different bot.
+    Grok Bot 0.78 writes selection.last-agent for the account in
+    client-meta.account-slot. That file is read on every poll, and its
+    agentId is the bot on screen. A window title is used only when that
+    blob is missing, and the bare title "Grok Bot" names nobody. Older
+    builds stored selectedAgentId. With no selection, the chat that was
+    opened (its file saved again without a new message) is the last one
+    viewed. A reply that only changes a file is not a switch. Uncertain
+    is reserved for an empty store.
     """
-    del window_titles  # titles are not a signal; callers may still pass them
-    slices, rows, _names = _load_stores(_store_list(directory, directories))
+    slices, rows, names = _load_stores(_store_list(directory, directories))
     if not rows:
+        _remember_open(names, None, "uncertain")
         return None
     accounts = _known_accounts(slices, rows)
     known = {row["agent_id"] for row in rows}
-    account = _freshest_account(slices, accounts)
+    account = None
+    slot = _slot_account(slices)
+    if slot:
+        matched = [item for item in accounts if _same_account(item, slot)]
+        if matched:
+            account = matched[0]
+    if account is None:
+        account = _freshest_account(slices, accounts)
     if account is None:
         present = {row["account"] for row in rows}
         account = next(iter(present)) if len(present) == 1 else None
     if account is None:
-        return None
-    scoped = [row for row in rows if row["account"] == account]
+        best = max(rows, key=_viewed_key)
+        _remember_open(names, best, "last viewed")
+        return best
+    scoped = [row for row in rows if _same_account(row["account"], account)]
     hits = [hit for hit in _selection_hits(slices, accounts, known) if hit[2] in (None, account)]
     for key, path in slices:
         match = ROSTER_SLICE.match(key)
@@ -1017,26 +1119,28 @@ def active_transcript(directory, window_titles=None, directories=None):
             selection_mtime = None
             selection_id = None
     _open_choice["selection"] = selection_id if strong else None
-    names = _names
 
     def choose(row, how):
         _remember_open(names, row, how)
         return row
 
-    opened = _focused_opens(scoped)
-    if len(opened) == 1 and (selection_mtime is None or opened[0]["stamp"] > selection_mtime + 0.5):
-        chosen = opened[0]
-        live = _live_row(scoped)
-        # A sync rewrites an idle chat and makes it look opened. If a different
-        # chat's file is newer, that is the conversation on this screen.
-        # A strong selection that names this opened chat still wins: a background
-        # bot's reply must not take the window.
-        if (live and live["path"] != chosen["path"]
-                and (live.get("stamp") or 0) > (chosen.get("stamp") or 0)
-                and _open_choice.get("selection") != chosen["agent_id"]):
-            return choose(live, "most recently active")
-        return choose(chosen, "opened file")
-    if selection_id:
+    # Grok Bot 0.78 writes selection.last-agent {agentId}. Re-read every poll.
+    # The window title is only "Grok Bot" on Mint, so it is a hint, not the source.
+    agent, agent_account = _last_agent(slices, account)
+    if agent:
+        chosen = _row_for(rows, agent_account or account, agent)
+        if chosen is None:
+            chosen = _row_for(rows, None, agent)
+        if chosen is not None:
+            _open_choice["selection"] = agent
+            return choose(chosen, "selection")
+    titled = agent_id_from_titles(window_titles, names)
+    if titled:
+        chosen = _row_for(scoped, account, titled)
+        if chosen is not None:
+            return choose(chosen, "window")
+    # Older builds stored selectedAgentId. A newer file does not take its place.
+    if strong and selection_id:
         chosen = _row_for(scoped, account, selection_id)
         if chosen is not None:
             return choose(chosen, "selection")
@@ -1045,8 +1149,23 @@ def active_transcript(directory, window_titles=None, directories=None):
     if chosen is not None:
         _open_choice["selection"] = selected
         return choose(chosen, "selection")
+    opened = _focused_opens(scoped)
+    if len(opened) == 1 and not strong:
+        live = _live_row(scoped)
+        # An idle file that was only touched is not the chat that just received a reply.
+        if live is None or live["path"] == opened[0]["path"] or (live.get("stamp") or 0) <= (opened[0].get("stamp") or 0):
+            return choose(opened[0], "opened file")
+    if follow_path:
+        for row in scoped:
+            if row["path"] == follow_path:
+                return choose(row, "kept")
     if len(scoped) == 1:
         return choose(scoped[0], "only chat")
+    pool = scoped or rows
+    if pool:
+        # No selection blob. The chat that was opened (file saved again without
+        # a new message) is the last one viewed, not the one a reply just changed.
+        return choose(max(pool, key=_viewed_key), "last viewed")
     return choose(None, "uncertain")
 
 
@@ -1101,9 +1220,9 @@ def reply_snapshot(directory, window_titles=None, directories=None):
 
     key lists identify replies without using their position. active file is
     the transcript path, or None when there is no chat to follow.
-    window_titles are ignored. Every call re-reads the stores. None for the
-    active file means the open chat is not known, so Back stays quiet.
-    The watcher uses watch_snapshot, which can still speak one new reply.
+    selection.last-agent selects the bot. A window title is used only when
+    that blob is missing. Every call re-reads the stores. None for the
+    active file means the store has no chat, so Back stays quiet.
     """
     folders = _store_list(directory, directories)
     names = {}
@@ -1207,17 +1326,17 @@ def watch_snapshot(directory, window_titles=None, directories=None, seen=None, f
 
     skipped is a list of (keys, reason, preview) for new replies left unspoken.
 
-    A known open chat wins. When the files no longer say which chat is on
-    screen, keep follow_path so a reply in the chat already being read is
-    still spoken. That happens when a reply lands: the file time matches the
-    new message, so the 'just opened' signal goes away. With no chat to keep,
-    one transcript that gained a reply is spoken. Several new replies and no
-    open chat stay quiet, and each one is listed in skipped.
+    A known open chat wins, including selection.last-agent re-read this poll.
+    When that blob is missing, keep follow_path so a reply in the chat already
+    being read is still spoken. Otherwise the last viewed chat is used. A
+    file that only changed because a reply arrived does not take its place.
+    Replies in every other chat are listed in skipped.
     """
     seen = seen if seen is not None else set()
     folders = _store_list(directory, directories)
     _slices, rows, names = _load_stores(folders)
-    transcript = active_transcript(directory, window_titles=window_titles, directories=directories)
+    transcript = active_transcript(
+        directory, window_titles=window_titles, directories=directories, follow_path=follow_path)
 
     def pack(row):
         lines, keylists, bot = _speech_lines(row, names)
@@ -1257,10 +1376,17 @@ def watch_snapshot(directory, window_titles=None, directories=None, seen=None, f
         _remember_open(names, followed, "kept")
         lines, bot_names, keylists, path = pack(followed)
         return lines, bot_names, keylists, path, skipped
-    if len(fresh_rows) == 1:
-        _remember_open(names, fresh_rows[0], "most recently active")
-        lines, bot_names, keylists, path = pack(fresh_rows[0])
-        return lines, bot_names, keylists, path, []
+    if rows:
+        transcript = max(rows, key=_viewed_key)
+        _remember_open(names, transcript, "last viewed")
+        lines, bot_names, keylists, path = pack(transcript)
+        skipped = []
+        for row in fresh_rows:
+            if row["path"] == transcript["path"]:
+                continue
+            for keys, line in pairs[row["path"]]:
+                skipped.append((keys, "not the open chat", line))
+        return lines, bot_names, keylists, path, skipped
     _remember_open(names, None, "uncertain")
     skipped = []
     for row in fresh_rows:

@@ -347,10 +347,12 @@ class StoreTests(unittest.TestCase):
             os.utime(larry_file, (1_700_000_009, 1_700_000_009))
             lines, _names, _keys, active = grok_store.reply_snapshot(
                 store, window_titles=["Grok Bot", "Amy — Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(active)
-            self.assertIsNone(grok_store.latest_replay(lines))
-            # A saved selection names the open chat. The window title does not.
+            self.assertIn("amy reply", " ".join(lines))
+            self.assertNotIn("larry reply", " ".join(lines))
+            self.assertIn("amy reply", grok_store.latest_replay(lines))
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.amy") + ".blob"))
+            # A saved selection names the open chat when the title does not.
             _blob(store, "sand.client.slice.account.a.ui.selected-agent",
                   '{"schemaVersion":1,"value":{"selectedAgentId":"larry"}}')
             lines, _names = grok_store.reply_lines(store)
@@ -360,8 +362,9 @@ class StoreTests(unittest.TestCase):
             self.assertNotIn("larry side note", spoken)
             os.remove(os.path.join(store, grok_store.encode_base32("sand.client.slice.account.a.ui.selected-agent") + ".blob"))
             lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Larry — Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(active)
+            self.assertIn("larry reply", " ".join(lines))
+            self.assertNotIn("amy reply", " ".join(lines))
+            self.assertIsNotNone(active)
             # A roster row marked selected also names the open chat.
             _blob(store, "sand.client.slice.account.a.roster.last-roster",
                   '{"schemaVersion":1,"value":{"rows":[{"id":"larry","name":"Larry","selected":true},{"id":"amy","name":"Amy"}]}}')
@@ -504,17 +507,20 @@ class StoreTests(unittest.TestCase):
                               '{"schemaVersion":1,"value":{"selectedAgentId":"moya","lastSelectedAgentId":"cameron"}}')
             os.utime(selection, (1_700_000_000, 1_700_000_000))
             os.utime(cameron, (1_700_000_002, 1_700_000_002))
-            # Cameron's file was saved again long after its last message: the chat was opened.
-            # Titles on Linux and Windows must not send Back back to Moya.
-            for titles in (["Grok Bot"], ["Moya — Grok Bot"], None):
+            # Selection says Moya. Cameron's file being rewritten is not a switch.
+            # A title that names Cameron is the bot on screen, and Back plays his latest.
+            for titles, needle, other in (
+                (["Grok Bot"], "moya reply", "cameron"),
+                (None, "moya reply", "cameron"),
+                (["Cameron — Grok Bot"], "cameron last reply", "moya reply"),
+            ):
                 lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=titles)
                 played = grok_store.latest_replay(lines)
-                self.assertIn("cameron last reply", played)
-                self.assertNotIn("moya", played.lower())
-                self.assertNotIn("cameron older", played)
-                self.assertTrue(active.endswith(grok_store.encode_base32(
-                    "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
-            # Two chats rewritten together, and no saved selection: not sure, so Back says nothing.
+                self.assertIn(needle, played)
+                self.assertNotIn(other, played.lower() if other == "cameron" else played)
+                self.assertNotIn("cameron older", played or "")
+            # No saved selection. Moya's file was saved again without a new message,
+            # so that is the last viewed chat. Back plays it. The log is not uncertain.
             os.remove(selection)
             moya = os.path.join(store, grok_store.encode_base32(
                 "sand.client.slice.account.a.transcript.replicas.moya") + ".blob")
@@ -523,9 +529,13 @@ class StoreTests(unittest.TestCase):
                              '{"kind":"send-message","id":"r-moya","seq":1,"timestampMs":1700000000000,"message":{"type":"text","content":"moya reply"}}'
                              ']}}')
             lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(active)
-            self.assertIsNone(grok_store.latest_replay(lines))
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
+            played = grok_store.latest_replay(lines)
+            self.assertIn("moya reply", played)
+            self.assertNotIn("cameron", played)
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
+            self.assertIn("last viewed", grok_store.open_chat_line())
         finally:
             shutil.rmtree(root)
 
@@ -599,7 +609,7 @@ class StoreTests(unittest.TestCase):
             self.assertTrue(active.endswith(grok_store.encode_base32(
                 "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
             self.assertIn("Moya", grok_store.open_chat_line())
-            self.assertIn("most recently active", grok_store.open_chat_line())
+            self.assertIn("selection", grok_store.open_chat_line())
             watched, _names, keys, path, skipped = grok_store.watch_snapshot(
                 store, seen=seen, follow_path=None)
             self.assertEqual(path, active)
@@ -613,7 +623,8 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_last_opened_from_another_device_does_not_hide_the_live_chat(self):
+    def test_a_reply_does_not_replace_the_last_viewed_chat(self):
+        """No selection.last-agent. Cameron's file was opened. Moya's new reply is not a switch."""
         root = tempfile.mkdtemp()
         try:
             store = os.path.join(root, "sand-client-persistence")
@@ -643,11 +654,13 @@ class StoreTests(unittest.TestCase):
                 1_700_000_300)
             watched, _names, keys, path, skipped = grok_store.watch_snapshot(store, seen=seen, follow_path=None)
             fresh = grok_store.unseen_lines(seen, watched, keys)
-            self.assertTrue(any("moya just arrived" in line for line in fresh), (fresh, skipped, grok_store.open_chat_line()))
-            self.assertFalse(any("moya just arrived" in line and reason == "not the open chat"
-                                 for _keys, reason, line in skipped))
+            self.assertFalse(any("moya just arrived" in line for line in fresh), (fresh, skipped, grok_store.open_chat_line()))
+            self.assertTrue(any("moya just arrived" in line and reason == "not the open chat"
+                                for _keys, reason, line in skipped))
             self.assertTrue(path.endswith(grok_store.encode_base32(
-                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
+                "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
+            self.assertIn("Cameron", grok_store.open_chat_line())
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
         finally:
             shutil.rmtree(root)
 
@@ -680,12 +693,10 @@ class StoreTests(unittest.TestCase):
             shutil.rmtree(root)
 
     def test_new_reply_is_spoken_when_the_open_chat_is_not_marked(self):
-        """Mint regression: blobs update, but nothing is spoken and no speak line is logged.
+        """No selection blob and a bare "Grok Bot" title. The newer file is followed.
 
-        Two chats, no saved selection, and the file time matches the newest
-        message. That is a normal reply, not a chat being opened, so the strict
-        snapshot stays empty. v1.3.3 then dropped the reply. The file is re-read
-        (the mtime changed) and the words are not an already-spoken duplicate.
+        v1.3.3 left the snapshot empty and dropped the reply. The open chat is
+        still named, the file is re-read, and the new words are spoken once.
         """
         root = tempfile.mkdtemp()
         try:
@@ -703,8 +714,11 @@ class StoreTests(unittest.TestCase):
             os.utime(moya, (1_700_000_000, 1_700_000_000))
             os.utime(cameron, (1_700_000_010, 1_700_000_010))
             lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(active)
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
+            self.assertIn("cameron reply", " ".join(lines))
+            self.assertNotIn("moya", " ".join(lines).lower())
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
             seen = set()
             grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
             self._append_reply(
@@ -717,19 +731,21 @@ class StoreTests(unittest.TestCase):
             parsed = grok_store._parsed_json(cameron)
             self.assertIn("just arrived", json.dumps(parsed))
             lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(active)
+            self.assertIn("just arrived", " ".join(lines))
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
             watched, _names, keys, path, skipped = grok_store.watch_snapshot(
                 store, window_titles=["Grok Bot"], seen=seen, follow_path=None)
             self.assertEqual(skipped, [])
-            self.assertTrue(path.endswith(".blob"))
+            self.assertEqual(path, active)
             fresh = grok_store.unseen_lines(seen, watched, keys)
             self.assertEqual(len(fresh), 1)
             self.assertIn("just arrived", fresh[0])
             self.assertNotIn("cameron reply", " ".join(fresh))
             spoken = set()
             self.assertTrue(grok_store.allow_auto_speech(spoken, "just arrived"))
-            self.assertIn("open chat unclear", grok_store.skip_log("open chat unclear", fresh[0]))
+            self.assertIn("not the open chat", grok_store.skip_log("not the open chat", fresh[0]))
         finally:
             shutil.rmtree(root)
 
@@ -765,8 +781,9 @@ class StoreTests(unittest.TestCase):
                 ']}}',
                 1_700_000_100)
             lines, _names, _keys, still = grok_store.reply_snapshot(store, window_titles=["Grok Bot"])
-            self.assertEqual(lines, [])
-            self.assertIsNone(still)
+            self.assertEqual(still, active)
+            self.assertIn("just arrived", " ".join(lines))
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
             watched, _names, keys, path, skipped = grok_store.watch_snapshot(
                 store, window_titles=["Grok Bot"], seen=seen, follow_path=active)
             self.assertEqual(path, active)
@@ -777,7 +794,8 @@ class StoreTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_two_new_replies_are_skipped_when_the_open_chat_is_unclear(self):
+    def test_two_new_replies_stay_with_the_last_viewed_chat(self):
+        """Both files gain a reply and nothing names a bot. One chat is followed, not both."""
         root = tempfile.mkdtemp()
         try:
             store = os.path.join(root, "sand-client-persistence")
@@ -811,13 +829,16 @@ class StoreTests(unittest.TestCase):
                 1_700_000_201)
             watched, _names, _keys, path, skipped = grok_store.watch_snapshot(
                 store, window_titles=["Grok Bot"], seen=seen, follow_path=None)
-            self.assertEqual(watched, [])
-            self.assertIsNone(path)
-            reasons = [reason for _keys, reason, line in skipped]
-            self.assertEqual(reasons, ["open chat unclear", "open chat unclear"])
-            self.assertTrue(any("moya just arrived" in line for _keys, _reason, line in skipped))
-            self.assertTrue(any("cameron just arrived" in line for _keys, _reason, line in skipped))
-            self.assertTrue(grok_store.skip_log("open chat unclear", "cameron just arrived").startswith("skip new reply:"))
+            self.assertTrue(path.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
+            self.assertTrue(any("cameron just arrived" in line for line in watched))
+            self.assertFalse(any("moya" in line.lower() for line in watched))
+            self.assertTrue(any(reason == "not the open chat" and "moya just arrived" in line
+                                for _keys, reason, line in skipped))
+            self.assertFalse(any("cameron just arrived" in line for _keys, _reason, line in skipped))
+            self.assertIn("Cameron", grok_store.open_chat_line())
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
+            self.assertTrue(grok_store.skip_log("not the open chat", "moya just arrived").startswith("skip new reply:"))
         finally:
             shutil.rmtree(root)
 
@@ -1084,6 +1105,189 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(platform_linux.preserve_key_file(path, lambda: "other"), "kept")
             self.assertEqual(platform_linux.preserve_key_file(os.path.join(root, "missing"), lambda: ""), "missing")
             self.assertEqual(platform_linux.preserve_key_file(os.path.join(root, "broken"), lambda: (_ for _ in ()).throw(OSError("no keyring"))), "missing")
+        finally:
+            shutil.rmtree(root)
+
+    def test_real_last_agent_blob_is_the_bot_on_screen(self):
+        """Grok Bot 0.78.1 stores the open bot in selection.last-agent, not selectedAgentId."""
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            work = "grok%7Cuser_work"
+            home = "grok%7Cuser_home"
+            moya = "b0387ed2-9d8c-4773-93fc-f17be44b24f9"
+            cameron = "11111111-2222-4333-8444-555555555555"
+
+            def key(account, rest):
+                return "sand.client.slice.account.%s.%s" % (account, rest)
+
+            slot_key = "sand.client.slice.client-meta.account-slot"
+            # Exact JSON of the 66-byte slot file was not captured. A string and a small object both name the account.
+            _blob(store, slot_key,
+                  '{"schemaVersion":1,"value":{"accountId":"grok|user_work"}}')
+            _blob(store, key(work, "roster.last-roster"),
+                  '{"schemaVersion":4,"value":{"rows":[{"id":"%s","name":"Moya"},{"id":"%s","name":"Cameron"}]}}' % (moya, cameron))
+            _blob(store, key(work, "transcript.replicas." + moya),
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"m1","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"moya older"}},'
+                  '{"kind":"send-message","id":"m2","seq":2,"timestampMs":1700000002000,"message":{"content":"moya latest","type":"text"}}'
+                  ']}}')
+            _blob(store, key(work, "transcript.replicas." + cameron),
+                  '{"schemaVersion":1,"value":{"entries":['
+                  '{"kind":"send-message","id":"c1","seq":1,"timestampMs":1600000001000,"message":{"type":"text","content":"cameron older"}},'
+                  '{"kind":"send-message","id":"c2","seq":2,"timestampMs":1800000002000,"message":{"type":"text","content":"cameron latest"}}'
+                  ']}}')
+            # The other account changed more recently. The slot says work is on screen.
+            _blob(store, key(home, "roster.last-roster"),
+                  '{"schemaVersion":4,"value":{"rows":[{"id":"home-bot","name":"Home"}]}}')
+            home_chat = _blob(store, key(home, "transcript.replicas.home-bot"),
+                              '{"schemaVersion":1,"value":{"entries":['
+                              '{"kind":"send-message","id":"h1","seq":1,"timestampMs":1900000000000,"message":{"type":"text","content":"home latest"}}'
+                              ']}}')
+            os.utime(home_chat, (1_900_000_000, 1_900_000_000))
+            last_payload = '{"schemaVersion":1,"value":{"agentId":"%s"}}' % moya
+            self.assertEqual(len(last_payload.encode("utf-8")), 78)
+            last_key = key(work, "selection.last-agent")
+            last = _blob(store, last_key, last_payload)
+            self.assertEqual(os.path.basename(last), grok_store.encode_base32(last_key) + ".blob")
+            self.assertEqual(grok_store.decode_base32(os.path.basename(last)[:-5]), last_key)
+            self.assertEqual(grok_store.encode_base32(last_key), grok_store.encode_base32(last_key).lower())
+            self.assertNotIn("=", os.path.basename(last))
+            os.utime(last, (1_700_000_100, 1_700_000_100))
+
+            def screen(titles):
+                lines, _names, _keys, active = grok_store.reply_snapshot(store, window_titles=titles)
+                return lines, grok_store.latest_replay(lines), active
+
+            lines, replay, active = screen(["Grok Bot"])
+            self.assertTrue(active.endswith(grok_store.encode_base32(key(work, "transcript.replicas." + moya)) + ".blob"))
+            self.assertIn("moya latest", replay)
+            self.assertNotIn("cameron", replay)
+            self.assertNotIn("home", replay)
+            self.assertEqual(len(lines), 2)
+            self.assertIn("moya older", lines[0])
+            self.assertIn("selection", grok_store.open_chat_line())
+            self.assertIn("Moya", grok_store.open_chat_line())
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
+            # The same account written as a string, including the encoded form, stays on Moya.
+            _blob(store, slot_key, '{"schemaVersion":1,"value":"grok%7Cuser_work"}')
+            lines, replay, active = screen(["Grok Bot"])
+            self.assertIn("moya latest", replay)
+            self.assertIn("Moya", grok_store.open_chat_line())
+            # A named title does not override the selection blob.
+            lines, replay, active = screen(["Cameron — Grok Bot"])
+            self.assertIn("moya latest", replay)
+            self.assertTrue(active.endswith(grok_store.encode_base32(key(work, "transcript.replicas." + moya)) + ".blob"))
+            # Switching bots rewrites last-agent. The next poll follows it, with no new message.
+            _blob(store, key(work, "selection.last-agent"),
+                  '{"schemaVersion":1,"value":{"agentId":"%s"}}' % cameron)
+            lines, replay, active = screen(["Grok Bot"])
+            self.assertIn("cameron latest", replay)
+            self.assertNotIn("cameron older", replay)
+            self.assertNotIn("moya", replay)
+            self.assertTrue(active.endswith(grok_store.encode_base32(key(work, "transcript.replicas." + cameron)) + ".blob"))
+            self.assertEqual([line for line in lines if line.startswith("Cameron ")], lines)
+            # Startup: the selection is already on disk, so the first read is that bot.
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(
+                store, window_titles=["Grok Bot"], seen=seen, follow_path=None)
+            self.assertEqual(path, active)
+            self.assertNotIn("uncertain", grok_store.open_chat_line() or "")
+            self.assertEqual(grok_store.unseen_lines(seen, watched, keys), [])
+            # The slot names the other account. Its only transcript is the chat on screen.
+            _blob(store, slot_key, '{"schemaVersion":1,"value":"grok|user_home"}')
+            lines, replay, active = screen(["Cameron — Grok Bot"])
+            self.assertIn("home latest", replay)
+            self.assertNotIn("cameron", replay)
+            self.assertNotIn("moya", replay)
+            self.assertIn("Home", grok_store.open_chat_line())
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
+        finally:
+            shutil.rmtree(root)
+
+    def test_back_forward_and_replay_follow_the_bot_on_screen(self):
+        """Switching bots moves the history and the replay to that bot's latest reply."""
+        root = tempfile.mkdtemp()
+        try:
+            store = os.path.join(root, "sand-client-persistence")
+            roster = "sand.client.slice.account.a.roster.last-roster"
+            selection = "sand.client.slice.account.a.ui.selected-agent"
+            _blob(store, roster,
+                  '{"schemaVersion":1,"value":{"rows":[{"id":"moya","name":"Moya"},{"id":"cameron","name":"Cameron"}]}}')
+            moya = _blob(store, "sand.client.slice.account.a.transcript.replicas.moya",
+                         '{"schemaVersion":1,"value":{"entries":['
+                         '{"kind":"send-message","id":"m1","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"moya older"}},'
+                         '{"kind":"send-message","id":"m2","seq":2,"timestampMs":1700000002000,"message":{"type":"text","content":"moya latest"}}'
+                         ']}}')
+            cameron = _blob(store, "sand.client.slice.account.a.transcript.replicas.cameron",
+                            '{"schemaVersion":1,"value":{"entries":['
+                            '{"kind":"send-message","id":"c1","seq":1,"timestampMs":1600000001000,"message":{"type":"text","content":"cameron older"}},'
+                            '{"kind":"send-message","id":"c2","seq":2,"timestampMs":1600000002000,"message":{"type":"text","content":"cameron latest"}}'
+                            ']}}')
+            # Cameron's file is newer. That must not decide who is on screen.
+            os.utime(cameron, (1_800_000_000, 1_800_000_000))
+            os.utime(moya, (1_700_000_000, 1_700_000_000))
+
+            def show(bot_id, title):
+                _blob(store, selection,
+                      '{"schemaVersion":1,"value":{"selectedAgentId":"%s"}}' % bot_id)
+                lines, _names, keys, active = grok_store.reply_snapshot(
+                    store, window_titles=[title])
+                replay = grok_store.latest_replay(lines)
+                return lines, keys, active, replay
+
+            def check(bot_id, title, latest, other):
+                lines, _keys, active, replay = show(bot_id, title)
+                blob = grok_store.encode_base32(
+                    "sand.client.slice.account.a.transcript.replicas." + bot_id) + ".blob"
+                self.assertTrue(active.endswith(blob), active)
+                self.assertTrue(all(bot_id == "moya" and line.startswith("Moya ") or
+                                    bot_id == "cameron" and line.startswith("Cameron ")
+                                    for line in lines), lines)
+                self.assertEqual(len(lines), 2)
+                self.assertIn(latest, replay)
+                self.assertNotIn(other, replay)
+                self.assertIn(latest, lines[-1])
+                self.assertIn("window", grok_store.open_chat_line())
+                # Forward walks the list to the newest. Back's first stop is that line.
+                self.assertIn(latest, lines[-1])
+                self.assertIn("older", lines[0])
+
+            check("moya", "Moya — Grok Bot", "moya latest", "cameron")
+            check("cameron", "Cameron — Grok Bot", "cameron latest", "moya")
+            # The title is only "Grok Bot", so the saved selection is the bot on screen.
+            # Cameron's latest reply is older and no new message has arrived.
+            lines, _names, _keys, active = grok_store.reply_snapshot(
+                store, window_titles=["Grok Bot"])
+            self.assertIn("cameron latest", grok_store.latest_replay(lines))
+            self.assertNotIn("moya", grok_store.latest_replay(lines))
+            self.assertTrue(active.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.cameron") + ".blob"))
+            self.assertIn("selection", grok_store.open_chat_line())
+            check("moya", "Moya — Grok Bot", "moya latest", "cameron")
+
+            # Startup already knows the viewed bot, so a reply in that chat is not skipped.
+            seen = set()
+            grok_store.mark_seen(seen, grok_store.every_reply_keylists(store))
+            self._append_reply(
+                moya,
+                '{"schemaVersion":1,"value":{"entries":['
+                '{"kind":"send-message","id":"m1","seq":1,"timestampMs":1700000001000,"message":{"type":"text","content":"moya older"}},'
+                '{"kind":"send-message","id":"m2","seq":2,"timestampMs":1700000002000,"message":{"type":"text","content":"moya latest"}},'
+                '{"kind":"send-message","id":"m3","seq":3,"timestampMs":1700000009000,"message":{"type":"text","content":"moya just arrived"}}'
+                ']}}',
+                1_700_000_050)
+            _blob(store, selection, '{"schemaVersion":1,"value":{"selectedAgentId":"moya"}}')
+            watched, _names, keys, path, skipped = grok_store.watch_snapshot(
+                store, window_titles=["Moya — Grok Bot"], seen=seen, follow_path=None)
+            fresh = grok_store.unseen_lines(seen, watched, keys)
+            self.assertTrue(any("moya just arrived" in line for line in fresh), fresh)
+            self.assertFalse(any("cameron" in line.lower() for line in fresh))
+            self.assertNotIn("uncertain", grok_store.open_chat_line())
+            self.assertTrue(path.endswith(grok_store.encode_base32(
+                "sand.client.slice.account.a.transcript.replicas.moya") + ".blob"))
+            self.assertTrue(all(reason == "not the open chat" for _k, reason, _line in skipped))
         finally:
             shutil.rmtree(root)
 

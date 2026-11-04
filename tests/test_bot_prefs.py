@@ -6,8 +6,8 @@ import version
 
 class VersionTests(unittest.TestCase):
     def test_version_is_one_place(self):
-        self.assertEqual(version.VERSION, "1.4.0")
-        self.assertEqual(version.APP_TITLE, "Grokbot Voice v1.4.0")
+        self.assertEqual(version.VERSION, "1.4.1")
+        self.assertEqual(version.APP_TITLE, "Grokbot Voice v1.4.1")
 
 
 class BotPrefTests(unittest.TestCase):
